@@ -157,6 +157,7 @@ _I18N: dict[str, dict[str, str]] = {
         'help.goal':            '  /goal [goal]         Enter Goal mode (asks for budget / worker cap)',
         'help.hive':            '  /hive [target]       Enter Hive multi-worker mode',
         'help.conductor':       '  /conductor [task]    Hand task to conductor.py for multi-subagent run',
+        'help.obsidian_review': '  /obsidian-review [period --vault path]  Review Obsidian changes and write a report',
         'help.scheduler':       '  /scheduler           Multi-pick reflect tasks / view cron',
         'help.emoji':           '  /emoji [style]       Pick the spinner pet face (picker / direct switch)',
         'help.quit':            '  /quit                Quit',
@@ -206,6 +207,8 @@ _I18N: dict[str, dict[str, str]] = {
         'cmd.hive.desc':        'enter Hive multi-worker mode',
         'cmd.conductor.arg':    '[task]',
         'cmd.conductor.desc':   'hand task to frontends/conductor.py for multi-subagent orchestration',
+        'cmd.obsidian_review.arg': '[period --vault path]',
+        'cmd.obsidian_review.desc': 'review Obsidian changes and write back to Reviews',
         'cmd.scheduler.desc':   'multi-pick start/stop reflect tasks (cron is driven by reflect/scheduler.py)',
         'cmd.emoji.arg':        '[style]',
         'cmd.emoji.desc':       'pick the spinner pet face — opens picker; arg switches directly',
@@ -421,6 +424,7 @@ _I18N: dict[str, dict[str, str]] = {
         'help.goal':            '  /goal [goal]         进入 Goal 模式（需 condition 约束）',
         'help.hive':            '  /hive [target]       进入 Hive 多 worker 协作模式',
         'help.conductor':       '  /conductor [task]    交给 conductor.py 做多 subagent 编排',
+        'help.obsidian_review': '  /obsidian-review [period --vault path]  复盘 Obsidian 周期内容并写回 Reviews',
         'help.scheduler':       '  /scheduler           多选启动 reflect 任务 / 查看 cron',
         'help.emoji':           '  /emoji [style]       切换 spinner 宠物样式（picker / 直接传参）',
         'help.quit':            '  /quit                退出',
@@ -470,6 +474,8 @@ _I18N: dict[str, dict[str, str]] = {
         'cmd.hive.desc':        '进入 Hive 多 worker 协作模式',
         'cmd.conductor.arg':    '[任务]',
         'cmd.conductor.desc':   '调用 frontends/conductor.py 做多 subagent 编排',
+        'cmd.obsidian_review.arg': '[周期 --vault 路径]',
+        'cmd.obsidian_review.desc': '复盘 Obsidian 周期内容并写回 Reviews',
         'cmd.scheduler.desc':   '多选启动/停止 reflect 任务（cron 由 reflect/scheduler.py 驱动）',
         'cmd.emoji.arg':        '[样式]',
         'cmd.emoji.desc':       '切换 spinner 宠物表情 — 打开 picker；带参数则直接切换',
@@ -1871,6 +1877,7 @@ def _cmds() -> list[tuple[str, str, str]]:
         ('/goal',      _t('cmd.goal.arg'),       _t('cmd.goal.desc')),
         ('/hive',      _t('cmd.hive.arg'),       _t('cmd.hive.desc')),
         ('/conductor', _t('cmd.conductor.arg'),  _t('cmd.conductor.desc')),
+        ('/obsidian-review', _t('cmd.obsidian_review.arg'), _t('cmd.obsidian_review.desc')),
         ('/scheduler', '',                       _t('cmd.scheduler.desc')),
         ('/rewind',   _t('cmd.rewind.arg'),     _t('cmd.rewind.desc')),
         ('/continue', _t('cmd.continue.arg'),   _t('cmd.continue.desc')),
@@ -4615,7 +4622,7 @@ class SB:
             # with a session-recovery prompt before the LLM sees it.  We
             # just forward the literal string — the agent expands it.
             self._submit('/resume', [])
-        elif name in ('update', 'autorun', 'morphling', 'goal', 'hive', 'conductor'):
+        elif name in ('update', 'autorun', 'morphling', 'goal', 'hive', 'conductor', 'obsidian-review'):
             # slash_cmds bundle — build a long prompt and feed it back through
             # _submit so the agent sees an ordinary user turn.  Keeps the
             # frontend ignorant of SOP details; see frontends/slash_cmds.py.
@@ -4888,6 +4895,7 @@ class SB:
                          _t('help.goal'),
                          _t('help.hive'),
                          _t('help.conductor'),
+                         _t('help.obsidian_review'),
                          _t('help.scheduler'),
                          _t('help.quit'),
                          _t('help.esc'),

@@ -466,6 +466,21 @@ class GenericAgentHandler(BaseHandler):
             return self._retry_or_exit("[System] Incomplete response. Regenerate and tooluse.")
         if 'max_tokens !!!]' in content[-100:]:
             return self._retry_or_exit("[System] max_tokens limit reached. Use multi small steps to do it.")
+
+        if (
+            "obsidian_review.py prepare" in content
+            and "changed_blocks.latest.json" in content
+            and ("code_run" in content or "调用" in content)
+        ):
+            yield "[Warn] Obsidian review task described a code_run call but did not execute it.\n"
+            return StepOutcome(
+                {},
+                next_prompt=(
+                    "[System] 你正在执行 Obsidian 周期复盘 Skill，但上一轮只写出了要调用 "
+                    "code_run 的说明，没有真正调用工具。现在必须立即调用 code_run 运行 "
+                    "`memory/obsidian_review/obsidian_review.py prepare`，不要再解释流程。"
+                ),
+            )
         
         if self._in_plan_mode() and any(kw in content for kw in ['任务完成', '全部完成', '已完成所有', '🏁']):
             if 'VERDICT' not in content and '[VERIFY]' not in content and '验证subagent' not in content:

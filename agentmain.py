@@ -193,6 +193,12 @@ class GenericAgent:
 
 GeneraticAgent = GenericAgent
 
+try:
+    from frontends import obsidian_review_cmd
+    obsidian_review_cmd.install(GenericAgent)
+except Exception as e:
+    print(f"[WARN] Obsidian review command unavailable: {e}")
+
 if __name__ == '__main__':
     import argparse
     from datetime import datetime

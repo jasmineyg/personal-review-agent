@@ -114,6 +114,11 @@ memory/L4_raw_sessions/*
 # Review Mode SOP
 !memory/review_sop.md
 
+# Obsidian Review Skill
+!memory/obsidian_review_sop.md
+!memory/obsidian_review/
+!memory/obsidian_review/**
+
 # Visual Studio
 .vs/
 restore_commit.txt

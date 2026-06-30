@@ -244,6 +244,14 @@ def build_conductor_prompt(args_text: str = "") -> str:
     )
 
 
+def build_obsidian_review_prompt(args_text: str = "") -> str:
+    try:
+        from frontends import obsidian_review_cmd
+    except Exception:
+        import obsidian_review_cmd  # type: ignore
+    return obsidian_review_cmd.render_prompt(args_text or "复盘我的 Obsidian 本周内容")
+
+
 # ----- /scheduler reflect-task discovery + launch -------------------------
 
 def list_reflect_tasks() -> list[dict]:
@@ -563,6 +571,7 @@ PALETTE_ENTRIES: list[tuple[str, str, str]] = [
     ("/goal",      "[goal]",    "进入 Goal 模式（需 condition 约束）"),
     ("/hive",      "[target]",  "进入 Hive 多 worker 协作模式"),
     ("/conductor", "[task]",    "调用 frontends/conductor.py 多 subagent 编排"),
+    ("/obsidian-review", "[period --vault path]", "复盘 Obsidian 周期内容并写回 Reviews"),
     ("/scheduler", "",          "多选启动/停止 reflect 任务（cron 由 reflect/scheduler.py 驱动）"),
     ("/resume",    "",           "列出最近会话并恢复其中一个（GA 端展开 prompt）"),
 ]
@@ -583,6 +592,7 @@ def prompt_for(cmd: str, args_text: str) -> Optional[str]:
         "/goal":      build_goal_prompt,
         "/hive":      build_hive_prompt,
         "/conductor": build_conductor_prompt,
+        "/obsidian-review": build_obsidian_review_prompt,
     }
     fn = table.get(cmd)
     return fn(args_text) if fn else None

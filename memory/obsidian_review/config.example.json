@@ -1,0 +1,13 @@
+{
+  "vault_path": "D:\\download\\Obsidian\\Jasmine",
+  "state_dir": ".obsidian-review-agent",
+  "output_dir": "Reviews",
+  "ignore_dirs": [".obsidian", ".trash", ".obsidian-review-agent", "Reviews"],
+  "ignore_tags": ["#private", "#secret", "#ignore-review", "#no-review"],
+  "default_period": "this-week",
+  "timezone": "Asia/Shanghai",
+  "week_start": "monday",
+  "report_language": "zh-CN",
+  "topic_mode": "auto_with_preferences",
+  "preferred_topics": []
+}
