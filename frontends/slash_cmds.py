@@ -571,7 +571,7 @@ PALETTE_ENTRIES: list[tuple[str, str, str]] = [
     ("/goal",      "[goal]",    "进入 Goal 模式（需 condition 约束）"),
     ("/hive",      "[target]",  "进入 Hive 多 worker 协作模式"),
     ("/conductor", "[task]",    "调用 frontends/conductor.py 多 subagent 编排"),
-    ("/obsidian-review", "[period --vault path]", "复盘 Obsidian 周期内容并写回 Reviews"),
+    ("/obsidian-review", "[init-profile|confirm-profile|period --vault path]", "初始化/确认 Obsidian 环境模型并复盘"),
     ("/scheduler", "",          "多选启动/停止 reflect 任务（cron 由 reflect/scheduler.py 驱动）"),
     ("/resume",    "",           "列出最近会话并恢复其中一个（GA 端展开 prompt）"),
 ]

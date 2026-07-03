@@ -1,5 +1,80 @@
 # Obsidian Review SOP
 
+> CURRENT AUTHORITATIVE FLOW. Any older first-baseline periodic-review wording
+> below is obsolete unless it agrees with this section.
+
+GenericAgent Obsidian 复盘 Skill 的当前流程是：
+
+```text
+init-profile -> 用户编辑草案 -> confirm-profile -> 周期复盘 -> finalize
+```
+
+首次进入一个 Vault 时，Agent 不能直接做周期性复盘。Obsidian 的目录命名、笔记分类和主线任务高度个人化，首次运行必须先建立一份经过用户校准的 Vault 环境模型。只有用户确认后，后续复盘才可以基于该模型做增量分析。
+
+## 当前命令
+
+```text
+/obsidian-review init-profile --vault D:\download\Obsidian\Jasmine
+/obsidian-review confirm-profile --vault D:\download\Obsidian\Jasmine
+/obsidian-review this-week --vault D:\download\Obsidian\Jasmine
+/obsidian-review --from 2026-06-01 --vault D:\download\Obsidian\Jasmine
+```
+
+## 当前文件位置
+
+```text
+Vault/Reviews/_AgentProfile/
+  vault_profile.draft.md
+
+Vault/.obsidian-review-agent/
+  config.json
+  vault_profile.confirmed.json
+  vault_profile_update.latest.json
+  changed_blocks.latest.json
+  review_digest.latest.json
+  pending_snapshot.latest.json
+  review_snapshot.json
+  review_state.json
+  review_state_update.latest.json
+```
+
+`vault_profile.draft.md` 是用户可见、可编辑的校准界面。确认后的 JSON 和复盘状态文件属于内部状态，放在 `.obsidian-review-agent/`。
+
+## 当前扫描规则
+
+所有 Vault 扫描默认跳过 `.obsidian-review-agent/`，避免 Agent 读取自己的状态文件。扫描也继续跳过 `.obsidian/`、`.trash/`、`Reviews/` 和带 `#private`、`#secret`、`#ignore-review`、`#no-review` 的整篇文件。
+
+`Reviews/_AgentProfile/vault_profile.draft.md` 由 `confirm-profile` 直接读取，不通过 Vault 扫描读取。
+
+## init-profile
+
+`profile-init` 只生成 `Reviews/_AgentProfile/vault_profile.draft.md`。它扫描 Vault、输出目录用途候选、内容类型候选、活跃主题候选和证据来源，但这些判断全部是待用户确认的草案。
+
+`profile-init` 不生成周期复盘报告，不建立正式 `review_snapshot.json`，不把草案写入长期状态。
+
+## confirm-profile
+
+`profile-confirm` 读取用户编辑后的 `Reviews/_AgentProfile/vault_profile.draft.md`。用户在校准区写的内容优先级最高；Agent 只负责结构化，不能覆盖用户修正。
+
+`profile-confirm` 必须重新扫描当前 Vault，并用确认时状态建立 `.obsidian-review-agent/review_snapshot.json`。不要复用 `init-profile` 的旧扫描结果。
+
+## 周期复盘
+
+`prepare` 必须先确认存在：
+
+```text
+.obsidian-review-agent/vault_profile.confirmed.json
+.obsidian-review-agent/review_snapshot.json
+```
+
+缺少 confirmed profile 时禁止进入周期复盘，并提示用户先运行 `init-profile` 和 `confirm-profile`。
+
+周期复盘必须优先使用 confirmed profile。`infer_topic_hint()` 只能作为低置信候选，用来发现可能的新主题，不能覆盖 confirmed profile 中的文件夹用途、长期目标、活跃主线。
+
+如果复盘中发现新的文件夹用途、长期目标、活跃主线候选，只能写入 `.obsidian-review-agent/vault_profile_update.latest.json` 作为建议更新，不自动合并。关键环境判断必须由用户再次确认后才可以进入 confirmed profile。
+
+---
+
 > GenericAgent Obsidian 周期复盘 Skill。目标是把 Obsidian Vault 中一个周期内
 > 的新增 / 修改内容，整理成带来源回链、主题归类、阻塞追踪和下周期继承事项的
 > Markdown 复盘报告，并写回 Vault。

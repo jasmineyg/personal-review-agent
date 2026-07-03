@@ -31,6 +31,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "vault_path": "",
     "state_dir": ".obsidian-review-agent",
     "output_dir": "Reviews",
+    "profile_draft_dir": "Reviews/_AgentProfile",
     "ignore_dirs": [".obsidian", ".trash", ".obsidian-review-agent", "Reviews"],
     "ignore_tags": ["#private", "#secret", "#ignore-review", "#no-review"],
     "default_period": "this-week",
@@ -57,6 +58,12 @@ def main(argv: list[str] | None = None) -> int:
     init_parser.add_argument("--vault", required=True, help="Obsidian Vault path.")
     init_parser.add_argument("--force", action="store_true", help="Overwrite existing config.json.")
 
+    profile_init_parser = subparsers.add_parser("profile-init", help="Scan vault and write editable profile draft.")
+    add_config_args(profile_init_parser)
+
+    profile_confirm_parser = subparsers.add_parser("profile-confirm", help="Confirm edited profile draft and establish initial snapshot.")
+    add_config_args(profile_confirm_parser)
+
     prepare_parser = subparsers.add_parser("prepare", help="Scan vault and write changed_blocks.latest.json.")
     add_config_args(prepare_parser)
     prepare_parser.add_argument("--period", choices=PERIOD_CHOICES, help="Built-in review period.")
@@ -70,6 +77,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "init":
             result = cmd_init(Path(args.vault), force=args.force)
+        elif args.command == "profile-init":
+            result = cmd_profile_init(args)
+        elif args.command == "profile-confirm":
+            result = cmd_profile_confirm(args)
         elif args.command == "prepare":
             result = cmd_prepare(args)
         elif args.command == "finalize":
@@ -103,8 +114,10 @@ def cmd_init(vault_arg: Path, force: bool = False) -> dict[str, Any]:
     config["vault_path"] = str(vault)
     state_dir = vault / config["state_dir"]
     output_dir = vault / config["output_dir"]
+    profile_draft_dir = vault / config["profile_draft_dir"]
     state_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
+    profile_draft_dir.mkdir(parents=True, exist_ok=True)
 
     config_path = state_dir / "config.json"
     if config_path.exists() and not force:
@@ -116,6 +129,7 @@ def cmd_init(vault_arg: Path, force: bool = False) -> dict[str, Any]:
             "config": str(config_path),
             "state_dir": str(state_dir),
             "output_dir": str(output_dir),
+            "profile_draft_dir": str(profile_draft_dir),
             "message": "config.json already exists; use --force to overwrite",
             "config_preview": existing,
         }
@@ -129,6 +143,78 @@ def cmd_init(vault_arg: Path, force: bool = False) -> dict[str, Any]:
         "config": str(config_path),
         "state_dir": str(state_dir),
         "output_dir": str(output_dir),
+        "profile_draft_dir": str(profile_draft_dir),
+    }
+
+
+def cmd_profile_init(args: argparse.Namespace) -> dict[str, Any]:
+    config, config_path, vault = load_config_from_args(args)
+    state_dir = vault / config["state_dir"]
+    profile_dir = vault / config["profile_draft_dir"]
+    state_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    ensure_inside_vault(profile_dir, vault, "profile draft directory")
+    ensure_config_file(config_path, config)
+    ensure_state_files(state_dir)
+
+    tz = get_timezone(config.get("timezone", "Asia/Shanghai"))
+    run_at = datetime.now(tz)
+    snapshot, skipped = build_snapshot(vault, config, run_at)
+    summary = build_vault_profile_summary(snapshot, skipped, config, run_at)
+    draft_path = profile_dir / "vault_profile.draft.md"
+    atomic_write_text(draft_path, render_vault_profile_draft(summary))
+
+    return {
+        "ok": True,
+        "action": "profile-init",
+        "vault_path": str(vault),
+        "config_path": str(config_path),
+        "profile_draft": str(draft_path),
+        "profile_draft_rel": rel_to_vault(draft_path, vault),
+        "markdown_files": summary["overview"]["markdown_files"],
+        "folders": len(summary["folder_summaries"]),
+        "skipped": skipped,
+        "next": "Edit Reviews/_AgentProfile/vault_profile.draft.md in Obsidian, then run /obsidian-review confirm-profile --vault <path>.",
+    }
+
+
+def cmd_profile_confirm(args: argparse.Namespace) -> dict[str, Any]:
+    config, config_path, vault = load_config_from_args(args)
+    state_dir = vault / config["state_dir"]
+    profile_dir = vault / config["profile_draft_dir"]
+    draft_path = profile_dir / "vault_profile.draft.md"
+    confirmed_path = state_dir / "vault_profile.confirmed.json"
+    snapshot_path = state_dir / "review_snapshot.json"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    ensure_config_file(config_path, config)
+    ensure_state_files(state_dir)
+
+    if not draft_path.exists() or not draft_path.is_file():
+        raise UserFacingError(
+            f"Profile draft does not exist: {draft_path}. Run profile-init first."
+        )
+
+    tz = get_timezone(config.get("timezone", "Asia/Shanghai"))
+    run_at = datetime.now(tz)
+    draft_text = draft_path.read_text(encoding="utf-8-sig", errors="replace")
+    snapshot, skipped = build_snapshot(vault, config, run_at)
+    summary = build_vault_profile_summary(snapshot, skipped, config, run_at)
+    confirmed_profile = build_confirmed_profile(draft_text, summary, config, vault, draft_path, run_at)
+
+    atomic_write_json(confirmed_path, confirmed_profile)
+    atomic_write_json(snapshot_path, snapshot)
+
+    return {
+        "ok": True,
+        "action": "profile-confirm",
+        "vault_path": str(vault),
+        "config_path": str(config_path),
+        "profile_draft": str(draft_path),
+        "confirmed_profile": str(confirmed_path),
+        "snapshot": str(snapshot_path),
+        "markdown_files": summary["overview"]["markdown_files"],
+        "skipped": skipped,
+        "next": "Confirmed profile saved. Periodic /obsidian-review runs can now use this calibrated vault model.",
     }
 
 
@@ -138,20 +224,32 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
     output_dir = vault / config["output_dir"]
     state_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
+    ensure_config_file(config_path, config)
+    profile_update_path = state_dir / "vault_profile_update.latest.json"
 
     tz = get_timezone(config.get("timezone", "Asia/Shanghai"))
     run_at = datetime.now(tz)
     period_info = resolve_period(args.period, args.from_date, config, run_at)
 
+    confirmed_profile_path = state_dir / "vault_profile.confirmed.json"
+    confirmed_profile = load_json(confirmed_profile_path, default=None)
+    if not confirmed_profile:
+        raise UserFacingError(
+            "Missing confirmed vault profile. Run /obsidian-review init-profile --vault <path>, "
+            "edit Reviews/_AgentProfile/vault_profile.draft.md, then run "
+            "/obsidian-review confirm-profile --vault <path> before periodic review."
+        )
+
     previous_snapshot_path = state_dir / "review_snapshot.json"
     previous_snapshot = load_json(previous_snapshot_path, default=None)
+    if not previous_snapshot:
+        raise UserFacingError(
+            "Missing initial review snapshot. Run /obsidian-review confirm-profile --vault <path> "
+            "to establish the confirmed baseline from the current Vault."
+        )
     current_snapshot, skipped = build_snapshot(vault, config, run_at)
-    if previous_snapshot:
-        changed_blocks = diff_snapshots(previous_snapshot, current_snapshot, period_info)
-        run_mode = "block_diff"
-    else:
-        changed_blocks = first_baseline_blocks(current_snapshot, period_info)
-        run_mode = "first_baseline"
+    changed_blocks = diff_snapshots(previous_snapshot, current_snapshot, period_info)
+    run_mode = "block_diff"
 
     suggested_report = allocate_report_path(vault, output_dir, period_info["period"], run_at)
     meta = {
@@ -171,6 +269,9 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "skipped": skipped,
         "preferred_topics": config.get("preferred_topics", []),
         "topic_mode": config.get("topic_mode", "auto_with_preferences"),
+        "vault_profile_file": rel_to_vault(confirmed_profile_path, vault),
+        "vault_profile_confirmed_at": confirmed_profile.get("confirmed_at"),
+        "vault_profile_update_file": rel_to_vault(profile_update_path, vault),
         "suggested_report": rel_to_vault(suggested_report, vault),
         "suggested_report_path": str(suggested_report),
         "pending_snapshot": rel_to_vault(state_dir / "pending_snapshot.latest.json", vault),
@@ -180,16 +281,19 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "meta": meta,
         "blocks": changed_blocks,
         "previous_state": load_json(state_dir / "review_state.json", default={}),
+        "vault_profile": confirmed_profile,
         "report_outline": report_outline(),
         "writing_guidelines": writing_guidelines(run_mode),
     }
     digest_payload = build_review_digest(payload)
+    profile_update_payload = build_profile_update_suggestions(digest_payload, confirmed_profile, run_at)
     changed_path = state_dir / "changed_blocks.latest.json"
     digest_path = state_dir / "review_digest.latest.json"
     pending_path = state_dir / "pending_snapshot.latest.json"
     atomic_write_json(changed_path, payload)
     atomic_write_json(digest_path, digest_payload)
     atomic_write_json(pending_path, current_snapshot)
+    atomic_write_json(profile_update_path, profile_update_payload)
 
     return {
         "ok": True,
@@ -203,8 +307,10 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "changed_blocks_file": str(changed_path),
         "review_digest_file": str(digest_path),
         "pending_snapshot": str(pending_path),
+        "confirmed_profile": str(confirmed_profile_path),
+        "vault_profile_update_file": str(profile_update_path),
         "suggested_report": str(suggested_report),
-        "next": "Generate the Markdown report from review_digest.latest.json, use changed_blocks.latest.json only for evidence lookup, write review_state_update.latest.json, then run finalize.",
+        "next": "Generate the Markdown report from review_digest.latest.json using the confirmed vault profile, use changed_blocks.latest.json only for evidence lookup, write review_state_update.latest.json and optional vault_profile_update.latest.json suggestions, then run finalize.",
     }
 
 
@@ -275,6 +381,13 @@ def ensure_state_files(state_dir: Path) -> None:
         )
 
 
+def ensure_config_file(config_path: Path, config: dict[str, Any]) -> None:
+    if config_path.exists():
+        return
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(config_path, config)
+
+
 def load_config_from_args(args: argparse.Namespace) -> tuple[dict[str, Any], Path, Path]:
     config_path: Path | None = None
     if getattr(args, "config", None):
@@ -306,6 +419,12 @@ def normalize_config(raw: dict[str, Any]) -> dict[str, Any]:
     for key in ("ignore_dirs", "ignore_tags", "preferred_topics"):
         if not isinstance(config.get(key), list):
             raise UserFacingError(f"config.{key} must be a list.")
+    mandatory_ignores = [DEFAULT_CONFIG["state_dir"], config.get("state_dir", ".obsidian-review-agent")]
+    normalized_existing = {normalize_path_part(item) for item in config.get("ignore_dirs", [])}
+    for item in mandatory_ignores:
+        if normalize_path_part(item) not in normalized_existing:
+            config["ignore_dirs"].append(item)
+            normalized_existing.add(normalize_path_part(item))
     return config
 
 
@@ -440,6 +559,301 @@ def build_snapshot(vault: Path, config: dict[str, Any], run_at: datetime) -> tup
         },
         skipped,
     )
+
+
+def build_vault_profile_summary(
+    snapshot: dict[str, Any],
+    skipped: dict[str, Any],
+    config: dict[str, Any],
+    run_at: datetime,
+) -> dict[str, Any]:
+    folder_summaries: dict[str, dict[str, Any]] = {}
+    activity_counts: dict[str, int] = {}
+    total_blocks = 0
+    for rel, file_info in snapshot.get("files", {}).items():
+        parts = rel.split("/")
+        top_dir = parts[0] if len(parts) > 1 else "(vault root)"
+        item = folder_summaries.setdefault(
+            top_dir,
+            {
+                "path": top_dir,
+                "file_count": 0,
+                "block_count": 0,
+                "activity_counts": {},
+                "sample_files": [],
+                "sample_headings": [],
+                "sample_points": [],
+                "latest_mtime": "",
+            },
+        )
+        item["file_count"] += 1
+        append_limited(item["sample_files"], rel, 8)
+        mtime = file_info.get("mtime", "")
+        if mtime and mtime > item["latest_mtime"]:
+            item["latest_mtime"] = mtime
+        for block in file_info.get("blocks", []):
+            total_blocks += 1
+            item["block_count"] += 1
+            activity = block.get("candidate_activity", "unknown")
+            increment(item["activity_counts"], activity)
+            increment(activity_counts, activity)
+            if block.get("type") == "heading":
+                append_limited(
+                    item["sample_headings"],
+                    {
+                        "heading_path": block.get("heading_path", []),
+                        "source_link": block.get("source_link"),
+                    },
+                    8,
+                )
+            elif not is_noise_block(block):
+                append_ranked_point(
+                    item["sample_points"],
+                    {
+                        "type": block.get("type"),
+                        "activity": activity,
+                        "source_link": block.get("source_link"),
+                        "text": truncate_text(clean_digest_text(block.get("text", "")), 180),
+                    },
+                    block_signal_score(block),
+                    5,
+                )
+
+    folders = []
+    for item in folder_summaries.values():
+        item["activity_counts"] = dict(sorted(item["activity_counts"].items()))
+        item["sample_points"] = [point for _score, point in item["sample_points"]]
+        item["role_candidate"] = infer_folder_role_candidate(item)
+        item["confidence"] = "low_candidate"
+        folders.append(item)
+    folders.sort(key=lambda x: (-x.get("file_count", 0), x.get("path", "")))
+
+    content_type_candidates = [
+        {"type": key, "count": value, "confidence": "low_candidate"}
+        for key, value in sorted(activity_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        if key != "unknown"
+    ]
+    active_topic_candidates = [
+        {
+            "topic": item["role_candidate"],
+            "folder": item["path"],
+            "evidence_sources": [p.get("source_link") for p in item.get("sample_points", []) if p.get("source_link")][:5],
+            "confidence": "low_candidate",
+        }
+        for item in folders[:12]
+        if item.get("sample_points")
+    ]
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": run_at.isoformat(),
+        "vault_path": snapshot.get("vault_path"),
+        "overview": {
+            "markdown_files": len(snapshot.get("files", {})),
+            "blocks": total_blocks,
+            "top_level_folders": len(folders),
+            "skipped": skipped,
+            "profile_draft_dir": config.get("profile_draft_dir"),
+        },
+        "folder_summaries": folders,
+        "content_type_candidates": content_type_candidates,
+        "active_topic_candidates": active_topic_candidates,
+    }
+
+
+def infer_folder_role_candidate(folder_summary: dict[str, Any]) -> str:
+    path = str(folder_summary.get("path", ""))
+    activities = folder_summary.get("activity_counts", {})
+    lowered = path.lower()
+    if activities.get("paper_reading", 0) >= 3 or "paper" in lowered:
+        return "论文/阅读笔记候选"
+    if activities.get("project_planning", 0) >= 3 or "project" in lowered:
+        return "项目/方案推进候选"
+    if activities.get("experiment_log", 0) >= 3:
+        return "实验/结果记录候选"
+    if activities.get("interview_review", 0) >= 3 or "interview" in lowered:
+        return "面试/复盘准备候选"
+    if activities.get("daily_log", 0) >= 3:
+        return "日记/周期记录候选"
+    return "用途待用户确认"
+
+
+def render_vault_profile_draft(summary: dict[str, Any]) -> str:
+    overview = summary.get("overview", {})
+    lines = [
+        "# Obsidian Vault Profile Draft",
+        "",
+        "> This is a first-run draft for user calibration. It is not a periodic review report.",
+        "> Edit the User Calibration section in Obsidian, then run `/obsidian-review confirm-profile --vault <path>`.",
+        "",
+        "## Metadata",
+        "",
+        f"- Generated at: {summary.get('generated_at')}",
+        f"- Vault: {summary.get('vault_path')}",
+        f"- Markdown files scanned: {overview.get('markdown_files', 0)}",
+        f"- Parsed blocks: {overview.get('blocks', 0)}",
+        f"- Top-level folders: {overview.get('top_level_folders', 0)}",
+        "",
+        "## Folder Role Candidates",
+        "",
+        "| Folder | Candidate role | Files | Evidence |",
+        "|---|---|---:|---|",
+    ]
+    for item in summary.get("folder_summaries", []):
+        evidence = ", ".join(item.get("sample_files", [])[:3])
+        lines.append(
+            f"| `{item.get('path')}` | {item.get('role_candidate')} | {item.get('file_count', 0)} | {evidence} |"
+        )
+
+    lines += [
+        "",
+        "## Content Type Candidates",
+        "",
+    ]
+    for item in summary.get("content_type_candidates", []):
+        lines.append(f"- {item.get('type')}: {item.get('count')} ({item.get('confidence')})")
+    if not summary.get("content_type_candidates"):
+        lines.append("- No clear content type candidates detected.")
+
+    lines += [
+        "",
+        "## Active Mainline Candidates",
+        "",
+    ]
+    for item in summary.get("active_topic_candidates", []):
+        sources = ", ".join([s for s in item.get("evidence_sources", []) if s])
+        lines.append(f"- {item.get('topic')} from `{item.get('folder')}` ({item.get('confidence')}) {sources}")
+    if not summary.get("active_topic_candidates"):
+        lines.append("- No active mainline candidates detected.")
+
+    lines += [
+        "",
+        "## Evidence Samples",
+        "",
+    ]
+    for item in summary.get("folder_summaries", [])[:20]:
+        lines.append(f"### {item.get('path')}")
+        lines.append("")
+        lines.append(f"- Candidate role: {item.get('role_candidate')}")
+        lines.append(f"- Latest modified file time: {item.get('latest_mtime') or 'unknown'}")
+        for point in item.get("sample_points", [])[:5]:
+            lines.append(f"- {point.get('source_link')}: {point.get('text')}")
+        lines.append("")
+
+    lines += [
+        "## User Calibration",
+        "",
+        "User-written content in this section has the highest priority. The agent may structure it, but must not overwrite it.",
+        "",
+        "### folder_roles",
+        "",
+        "<!-- Example: - AI-Agent/knowledge = paper notes and learning material, not an active project. -->",
+        "",
+        "### content_types",
+        "",
+        "<!-- Example: - Clippings = pending reading material. -->",
+        "",
+        "### active_mainlines",
+        "",
+        "<!-- Example: - Personal-review-agent Obsidian review workflow is an active mainline. -->",
+        "",
+        "### archive_or_ignore",
+        "",
+        "<!-- Example: - Archive/ = historical material, do not treat as current progress. -->",
+        "",
+        "### review_preferences",
+        "",
+        "<!-- Example: - Prefer project progress and unresolved blockers over reading-volume summaries. -->",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def build_confirmed_profile(
+    draft_text: str,
+    summary: dict[str, Any],
+    config: dict[str, Any],
+    vault: Path,
+    draft_path: Path,
+    run_at: datetime,
+) -> dict[str, Any]:
+    calibration = extract_user_calibration(draft_text)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "confirmed_at": run_at.isoformat(),
+        "vault_path": str(vault),
+        "confirmation_source": rel_to_vault(draft_path, vault),
+        "profile_draft_dir": config.get("profile_draft_dir"),
+        "user_calibration_priority": "highest",
+        "folder_roles": calibration_entries(
+            calibration.get("folder_roles", ""),
+            summary.get("folder_summaries", []),
+            "role_candidate",
+        ),
+        "content_types": calibration_entries(
+            calibration.get("content_types", ""),
+            summary.get("content_type_candidates", []),
+            "type",
+        ),
+        "active_mainlines": calibration_entries(
+            calibration.get("active_mainlines", ""),
+            summary.get("active_topic_candidates", []),
+            "topic",
+        ),
+        "archive_or_ignore": calibration_entries(calibration.get("archive_or_ignore", ""), [], "text"),
+        "review_preferences": calibration_entries(calibration.get("review_preferences", ""), [], "text"),
+        "user_calibration": calibration,
+        "draft_scan_summary": {
+            "generated_at": summary.get("generated_at"),
+            "confirmed_scan_at": run_at.isoformat(),
+            "overview": summary.get("overview", {}),
+        },
+        "agent_candidate_context": {
+            "folder_summaries": summary.get("folder_summaries", [])[:40],
+            "content_type_candidates": summary.get("content_type_candidates", []),
+            "active_topic_candidates": summary.get("active_topic_candidates", []),
+        },
+    }
+
+
+def extract_user_calibration(draft_text: str) -> dict[str, str]:
+    return {
+        key: extract_markdown_subsection(draft_text, key)
+        for key in ("folder_roles", "content_types", "active_mainlines", "archive_or_ignore", "review_preferences")
+    }
+
+
+def extract_markdown_subsection(text: str, heading: str) -> str:
+    pattern = re.compile(rf"(?im)^###\s+{re.escape(heading)}\s*$")
+    match = pattern.search(text or "")
+    if not match:
+        return ""
+    start = match.end()
+    next_match = re.search(r"(?m)^###\s+|\n##\s+", text[start:])
+    end = start + next_match.start() if next_match else len(text)
+    return strip_html_comments(text[start:end]).strip()
+
+
+def strip_html_comments(text: str) -> str:
+    return re.sub(r"<!--.*?-->", "", text or "", flags=re.DOTALL)
+
+
+def calibration_entries(user_text: str, fallback: list[dict[str, Any]], fallback_label: str) -> list[dict[str, Any]]:
+    lines = [
+        line.strip().lstrip("-*").strip()
+        for line in (user_text or "").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if lines:
+        return [{"source": "user_calibration", "text": line} for line in lines]
+    entries = []
+    for item in fallback:
+        entry = dict(item)
+        entry["source"] = "agent_draft_unedited"
+        if fallback_label in item:
+            entry["text"] = item.get(fallback_label)
+        entries.append(entry)
+    return entries
 
 
 def is_ignored_path(rel: str, config: dict[str, Any]) -> bool:
@@ -794,6 +1208,7 @@ def count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
 
 def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
     meta = changed_payload.get("meta", {})
+    vault_profile = changed_payload.get("vault_profile") or {}
     blocks = [b for b in changed_payload.get("blocks", []) if not is_noise_block(b)]
     files: dict[str, dict[str, Any]] = {}
     for block in blocks:
@@ -849,7 +1264,14 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
     for item in files.values():
         item["statuses"] = dict(sorted(item["statuses"].items()))
         item["activities"] = dict(sorted(item["activities"].items()))
-        item["topic_hint"] = infer_topic_hint(item)
+        profile_hint = confirmed_profile_hint(item, vault_profile)
+        if profile_hint:
+            item["topic_hint"] = profile_hint["topic"]
+            item["topic_confidence"] = "confirmed_profile"
+            item["profile_hint"] = profile_hint
+        else:
+            item["topic_hint"] = infer_topic_hint(item)
+            item["topic_confidence"] = "low_candidate"
         item["representative_points"] = [p for _score, p in item["representative_points"]]
         score = item.pop("_score", 0)
         item["signal_score"] = score
@@ -909,6 +1331,11 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
             ),
         },
         "topic_summaries": sorted(topic_summaries.values(), key=lambda x: (-len(x.get("key_points", [])), x["topic"])),
+        "vault_profile_context": compact_vault_profile(vault_profile),
+        "profile_update_policy": (
+            "Folder roles, long-term goals, and active mainlines from the confirmed profile must not be overwritten. "
+            "Write only suggestions to vault_profile_update.latest.json when new evidence appears."
+        ),
         "file_summaries": file_summaries[:80],
         "open_items": collect_points(file_summaries, "todos", 30),
         "blockers": collect_points(file_summaries, "blockers", 30),
@@ -916,6 +1343,105 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
         "source_index": build_source_index(file_summaries, 120),
         "report_outline": report_outline(),
         "writing_guidelines": digest_writing_guidelines(meta.get("run_mode", "")),
+    }
+
+
+def confirmed_profile_hint(file_summary: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any] | None:
+    if not isinstance(profile, dict):
+        return None
+    rel = str(file_summary.get("file", "")).replace("\\", "/")
+    best: dict[str, Any] | None = None
+    best_len = -1
+    for entry in profile.get("folder_roles", []) or []:
+        path = extract_profile_entry_path(entry)
+        if not path:
+            continue
+        norm = normalize_path_part(path)
+        if not norm:
+            continue
+        rel_norm = normalize_path_part(rel)
+        if rel_norm == norm or rel_norm.startswith(norm + "/"):
+            if len(norm) > best_len:
+                best_len = len(norm)
+                topic = extract_profile_entry_label(entry) or path
+                best = {
+                    "topic": topic,
+                    "matched_folder": path,
+                    "source": entry.get("source", "confirmed_profile") if isinstance(entry, dict) else "confirmed_profile",
+                }
+    return best
+
+
+def extract_profile_entry_path(entry: Any) -> str:
+    if isinstance(entry, dict):
+        for key in ("path", "folder", "file", "top_dir"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().strip("`")
+        text = str(entry.get("text", "")).strip()
+    else:
+        text = str(entry or "").strip()
+    match = re.search(r"`([^`]+)`", text)
+    if match:
+        return match.group(1).strip()
+    match = re.match(r"([^=:：]+)\s*(?:=|:|：)", text)
+    if match:
+        return match.group(1).strip().strip("`")
+    return ""
+
+
+def extract_profile_entry_label(entry: Any) -> str:
+    if isinstance(entry, dict):
+        for key in ("role", "role_candidate", "topic", "text", "type"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return str(entry or "").strip()
+
+
+def compact_vault_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(profile, dict) or not profile:
+        return {}
+    return {
+        "confirmed_at": profile.get("confirmed_at"),
+        "confirmation_source": profile.get("confirmation_source"),
+        "user_calibration_priority": profile.get("user_calibration_priority"),
+        "folder_roles": profile.get("folder_roles", [])[:30],
+        "content_types": profile.get("content_types", [])[:30],
+        "active_mainlines": profile.get("active_mainlines", [])[:30],
+        "archive_or_ignore": profile.get("archive_or_ignore", [])[:30],
+        "review_preferences": profile.get("review_preferences", [])[:30],
+    }
+
+
+def build_profile_update_suggestions(
+    digest_payload: dict[str, Any],
+    confirmed_profile: dict[str, Any],
+    run_at: datetime,
+) -> dict[str, Any]:
+    suggestions = []
+    confirmed_topics = {
+        str(entry.get("topic") or entry.get("text") or entry.get("role") or entry.get("role_candidate", "")).strip()
+        for entry in (confirmed_profile or {}).get("active_mainlines", []) or []
+        if isinstance(entry, dict)
+    }
+    for topic in digest_payload.get("topic_summaries", []) or []:
+        name = str(topic.get("topic", "")).strip()
+        if name and name not in confirmed_topics:
+            suggestions.append(
+                {
+                    "kind": "new_topic_candidate",
+                    "topic": name,
+                    "confidence": "low_candidate",
+                    "sources": topic.get("sources", [])[:8],
+                }
+            )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": run_at.isoformat(),
+        "status": "suggested_only_not_merged",
+        "policy": "Do not automatically merge folder roles, long-term goals, or active mainlines. User confirmation is required.",
+        "suggestions": suggestions[:20],
     }
 
 
@@ -1129,6 +1655,23 @@ def atomic_write_json(path: Path, data: Any) -> None:
         # Some Windows sandboxed environments allow normal writes but deny
         # rename/replace operations. Fall back to a direct write so the helper
         # remains usable in local GenericAgent workspaces.
+        path.write_text(text, encoding="utf-8")
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=str(path.parent), suffix=".tmp") as tmp:
+        tmp.write(text)
+        tmp_path = Path(tmp.name)
+    try:
+        os.replace(str(tmp_path), str(path))
+    except PermissionError:
         path.write_text(text, encoding="utf-8")
         try:
             tmp_path.unlink()
