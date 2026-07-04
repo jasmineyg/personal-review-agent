@@ -18,9 +18,9 @@ from typing import Optional
 
 CODE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT_REL = "memory/obsidian_review/obsidian_review.py"
-SOP_REL = "memory/obsidian_review_sop.md"
+SOP_REL = "memory/obsidian_periodic_review_sop.md"
 SCRIPT_PATH = os.path.join(CODE_ROOT, "memory", "obsidian_review", "obsidian_review.py")
-SOP_PATH = os.path.join(CODE_ROOT, "memory", "obsidian_review_sop.md")
+SOP_PATH = os.path.join(CODE_ROOT, "memory", "obsidian_periodic_review_sop.md")
 
 PROFILE_COMMANDS = {"init-profile", "confirm-profile"}
 PERIOD_ALIASES = {
@@ -165,7 +165,7 @@ def _profile_command(user_request: str, display_queue=None) -> Optional[str]:
             "Obsidian 环境模型草案已生成。\n\n"
             f"- 草案路径：{data.get('profile_draft')}\n"
             f"- 扫描 Markdown 文件数：{data.get('markdown_files')}\n"
-            "- 下一步：在 Obsidian 中编辑 `Reviews/_AgentProfile/vault_profile.draft.md` 的 User Calibration 区，"
+            "- 下一步：在 Obsidian 中直接修改 `Reviews/_AgentProfile/vault_profile.draft.md` 表格里的“作用”列，"
             "然后运行 `/obsidian-review confirm-profile --vault <path>`。"
         )
     else:
@@ -218,6 +218,7 @@ def render_report_prompt(user_request: str, prepared: dict) -> str:
     period = prepared.get("period", "")
     date_start = prepared.get("date_start", "")
     date_end = prepared.get("date_end", "")
+    changed_files = prepared.get("changed_files", 0)
     changed_blocks = prepared.get("changed_blocks", 0)
     vault_arg = f' --vault "{vault}"' if vault else ""
 
@@ -238,21 +239,23 @@ GenericAgent 已经完成确定性准备步骤，prepare 输出如下：
 
 1. 读取 `{SOP_PATH}`，确认报告结构。
 2. 读取 `{review_digest_file}` 作为主要写作输入，其中包含用户已确认的 vault profile 上下文。
-3. 只有当 digest 的来源不够清楚时，才读取 `{changed_blocks_file}` 查证，不要直接扫描整个 Vault。
-4. 按 SOP 的固定章节生成 Markdown 复盘报告，写入：
+3. 报告必须以 `review_digest.latest.json` 里的 `file_summaries` 为第一证据，覆盖本周期所有新增/修改文件；再按 confirmed profile 的主题把这些文件串成逻辑线。
+4. 只有当 digest 的来源不够清楚时，才读取 `{changed_blocks_file}` 查证文件内细节；不要把 changed blocks 当作报告基点，也不要直接扫描整个 Vault。
+5. 按 SOP 的固定章节生成 Markdown 复盘报告，写入：
    `{suggested_report}`
-5. 在 Vault 的 `.obsidian-review-agent/review_state_update.latest.json` 写入轻量状态更新，至少包含：
+6. 在 Vault 的 `.obsidian-review-agent/review_state_update.latest.json` 写入轻量状态更新，至少包含：
    - `open_items`
    - `blockers`
    - `active_topics`
-6. 如果发现新的文件夹用途、长期目标、活跃主线候选，只能把建议写入：
+7. 如果发现新的文件夹用途、长期目标、活跃主线候选，只能把建议写入：
    `{profile_update_file}`
    不得自动合并到 confirmed profile。
-7. 报告写成功后运行 finalize：
+8. 报告写成功后运行 finalize：
    `python "{SCRIPT_PATH}" finalize{vault_arg} --report "{suggested_report}"`
-8. 最后只向用户汇报：
+9. 最后只向用户汇报：
    - 报告路径
    - 本次周期和时间范围：{period}，{date_start} 到 {date_end}
+   - changed/new files 数量：{changed_files}
    - changed blocks 数量：{changed_blocks}
    - 是否 finalize 成功
 
@@ -261,13 +264,14 @@ GenericAgent 已经完成确定性准备步骤，prepare 输出如下：
 - confirmed profile 是文件夹用途、长期目标、活跃主线的最高优先级上下文。
 - `infer_topic_hint()` 相关内容只能当低置信候选，不得覆盖 confirmed profile。
 - `vault_profile_update.latest.json` 只表示建议更新，不自动合并关键判断。
-- `review_digest.latest.json` 是主要输入；`changed_blocks.latest.json` 是完整证据文件，不要逐条搬运。
+- `review_digest.latest.json` 是主要输入；其中 `file_summaries` 是主证据，`changed_blocks.latest.json` 只是细节查证文件。
+- 必须总结本周期所有新增/修改文件；每个有变化的用户主题都要形成一条逻辑线。
 - 禁止把报告写成 `[[来源]]: 原文片段` 列表；必须按主题写逻辑串联总结。
 - source_link 已经是 Obsidian 双链，原样使用，不要再套一层 `[[...]]`。
 - 禁止保留 `[整体总结]`、`[待填写]`、`[项目进展]` 之类占位符。
 - 不要在报告写成功前 finalize。
 - 报告要写回 Obsidian 的 `Reviews/`，不是只输出在对话里。
-- 关键结论尽量使用 changed block 里的 Obsidian `source_link`。
+- 关键结论优先使用 `file_summaries` 中的 `source_links`；必要时再用 changed block 的 `source_link` 查证细节。
 """
 
 

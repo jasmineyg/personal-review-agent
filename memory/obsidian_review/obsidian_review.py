@@ -247,9 +247,16 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
             "Missing initial review snapshot. Run /obsidian-review confirm-profile --vault <path> "
             "to establish the confirmed baseline from the current Vault."
         )
+    previous_state = load_json(state_dir / "review_state.json", default={})
     current_snapshot, skipped = build_snapshot(vault, config, run_at)
-    changed_blocks = diff_snapshots(previous_snapshot, current_snapshot, period_info)
-    run_mode = "block_diff"
+    if isinstance(previous_state, dict) and not previous_state.get("last_run"):
+        changed_files = period_file_summaries(current_snapshot, period_info, confirmed_profile)
+        changed_blocks = first_baseline_blocks(current_snapshot, period_info)
+        run_mode = "first_baseline"
+    else:
+        changed_files = diff_file_summaries(previous_snapshot, current_snapshot, period_info, confirmed_profile)
+        changed_blocks = diff_snapshots(previous_snapshot, current_snapshot, period_info)
+        run_mode = "block_diff"
 
     suggested_report = allocate_report_path(vault, output_dir, period_info["period"], run_at)
     meta = {
@@ -263,6 +270,8 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "date_end": period_info["date_end"],
         "run_at": run_at.isoformat(),
         "run_mode": run_mode,
+        "changed_files_count": len(changed_files),
+        "changed_file_status_counts": count_by(changed_files, "file_status"),
         "changed_blocks_count": len(changed_blocks),
         "changed_status_counts": count_by(changed_blocks, "status"),
         "candidate_activity_counts": count_by(changed_blocks, "candidate_activity"),
@@ -279,8 +288,9 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
 
     payload = {
         "meta": meta,
+        "changed_files": changed_files,
         "blocks": changed_blocks,
-        "previous_state": load_json(state_dir / "review_state.json", default={}),
+        "previous_state": previous_state,
         "vault_profile": confirmed_profile,
         "report_outline": report_outline(),
         "writing_guidelines": writing_guidelines(run_mode),
@@ -303,6 +313,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "period": period_info["period"],
         "date_start": period_info["date_start"],
         "date_end": period_info["date_end"],
+        "changed_files": len(changed_files),
         "changed_blocks": len(changed_blocks),
         "changed_blocks_file": str(changed_path),
         "review_digest_file": str(digest_path),
@@ -310,7 +321,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "confirmed_profile": str(confirmed_profile_path),
         "vault_profile_update_file": str(profile_update_path),
         "suggested_report": str(suggested_report),
-        "next": "Generate the Markdown report from review_digest.latest.json using the confirmed vault profile, use changed_blocks.latest.json only for evidence lookup, write review_state_update.latest.json and optional vault_profile_update.latest.json suggestions, then run finalize.",
+        "next": "Generate the Markdown report from review_digest.latest.json using changed/new files as the primary evidence and changed_blocks.latest.json only for detail lookup, write review_state_update.latest.json and optional vault_profile_update.latest.json suggestions, then run finalize.",
     }
 
 
@@ -571,53 +582,56 @@ def build_vault_profile_summary(
     activity_counts: dict[str, int] = {}
     total_blocks = 0
     for rel, file_info in snapshot.get("files", {}).items():
-        parts = rel.split("/")
-        top_dir = parts[0] if len(parts) > 1 else "(vault root)"
-        item = folder_summaries.setdefault(
-            top_dir,
-            {
-                "path": top_dir,
-                "file_count": 0,
-                "block_count": 0,
-                "activity_counts": {},
-                "sample_files": [],
-                "sample_headings": [],
-                "sample_points": [],
-                "latest_mtime": "",
-            },
-        )
-        item["file_count"] += 1
-        append_limited(item["sample_files"], rel, 8)
+        folder_paths = folder_paths_for_file(rel)
         mtime = file_info.get("mtime", "")
-        if mtime and mtime > item["latest_mtime"]:
-            item["latest_mtime"] = mtime
+        for folder_path in folder_paths:
+            item = folder_summaries.setdefault(
+                folder_path,
+                {
+                    "path": folder_path,
+                    "depth": 0 if folder_path == "(vault root)" else folder_path.count("/") + 1,
+                    "file_count": 0,
+                    "block_count": 0,
+                    "activity_counts": {},
+                    "sample_files": [],
+                    "sample_headings": [],
+                    "sample_points": [],
+                    "latest_mtime": "",
+                },
+            )
+            item["file_count"] += 1
+            append_limited(item["sample_files"], rel, 8)
+            if mtime and mtime > item["latest_mtime"]:
+                item["latest_mtime"] = mtime
         for block in file_info.get("blocks", []):
             total_blocks += 1
-            item["block_count"] += 1
             activity = block.get("candidate_activity", "unknown")
-            increment(item["activity_counts"], activity)
             increment(activity_counts, activity)
-            if block.get("type") == "heading":
-                append_limited(
-                    item["sample_headings"],
-                    {
-                        "heading_path": block.get("heading_path", []),
-                        "source_link": block.get("source_link"),
-                    },
-                    8,
-                )
-            elif not is_noise_block(block):
-                append_ranked_point(
-                    item["sample_points"],
-                    {
-                        "type": block.get("type"),
-                        "activity": activity,
-                        "source_link": block.get("source_link"),
-                        "text": truncate_text(clean_digest_text(block.get("text", "")), 180),
-                    },
-                    block_signal_score(block),
-                    5,
-                )
+            for folder_path in folder_paths:
+                item = folder_summaries[folder_path]
+                item["block_count"] += 1
+                increment(item["activity_counts"], activity)
+                if block.get("type") == "heading":
+                    append_limited(
+                        item["sample_headings"],
+                        {
+                            "heading_path": block.get("heading_path", []),
+                            "source_link": block.get("source_link"),
+                        },
+                        8,
+                    )
+                elif not is_noise_block(block):
+                    append_ranked_point(
+                        item["sample_points"],
+                        {
+                            "type": block.get("type"),
+                            "activity": activity,
+                            "source_link": block.get("source_link"),
+                            "text": truncate_text(clean_digest_text(block.get("text", "")), 180),
+                        },
+                        block_signal_score(block),
+                        5,
+                    )
 
     folders = []
     for item in folder_summaries.values():
@@ -626,7 +640,7 @@ def build_vault_profile_summary(
         item["role_candidate"] = infer_folder_role_candidate(item)
         item["confidence"] = "low_candidate"
         folders.append(item)
-    folders.sort(key=lambda x: (-x.get("file_count", 0), x.get("path", "")))
+    folders.sort(key=lambda x: (x.get("path", "").count("/"), x.get("path", "")))
 
     content_type_candidates = [
         {"type": key, "count": value, "confidence": "low_candidate"}
@@ -651,7 +665,7 @@ def build_vault_profile_summary(
         "overview": {
             "markdown_files": len(snapshot.get("files", {})),
             "blocks": total_blocks,
-            "top_level_folders": len(folders),
+            "folders": len(folders),
             "skipped": skipped,
             "profile_draft_dir": config.get("profile_draft_dir"),
         },
@@ -661,112 +675,116 @@ def build_vault_profile_summary(
     }
 
 
+def folder_paths_for_file(rel: str) -> list[str]:
+    parts = rel.split("/")[:-1]
+    if not parts:
+        return ["(vault root)"]
+    return ["/".join(parts[:index]) for index in range(1, len(parts) + 1)]
+
+
 def infer_folder_role_candidate(folder_summary: dict[str, Any]) -> str:
     path = str(folder_summary.get("path", ""))
     activities = folder_summary.get("activity_counts", {})
     lowered = path.lower()
-    if activities.get("paper_reading", 0) >= 3 or "paper" in lowered:
-        return "论文/阅读笔记候选"
-    if activities.get("project_planning", 0) >= 3 or "project" in lowered:
-        return "项目/方案推进候选"
+    normalized = path.replace("\\", "/")
+    path_roles = {
+        "AI-Agent": "Agent/RAG 相关学习、论文笔记和面试准备的综合区",
+        "AI-Agent/Paper": "Agent 方向论文阅读笔记",
+        "AI-Agent/Paper/Agent": "Agent 机制、工具调用、记忆等方向的论文笔记",
+        "AI-Agent/Paper/Multi-Agent": "Multi-Agent 方向论文阅读笔记",
+        "AI-Agent/interview": "Agent/RAG 面试准备、面试记录和复盘",
+        "AI-Agent/knowledge": "Agent 工程知识、框架资料和学习整理",
+        "AI-Agent/knowledge/Codex": "Codex/Agent 工具使用、源码理解和工作流整理",
+        "Clippings": "网页剪藏和待读资料，通常不等同于已经完成的学习成果",
+        "LLM": "LLM 基础知识和论文阅读笔记",
+        "LLM/Paper": "LLM 论文阅读笔记",
+        "MISGL": "MISGL/图神经网络相关实验、结果和方法记录",
+        "RAG": "RAG 项目、论文和面试表达整理",
+        "RAG/Paper": "RAG 论文阅读笔记",
+    }
+    if normalized in path_roles:
+        return path_roles[normalized]
+    if "interview" in lowered or "面试" in path:
+        return "面试准备、面试记录和复盘"
+    if "clippings" in lowered or "剪藏" in path:
+        return "网页剪藏和待读资料"
+    if "paper" in lowered or "论文" in path:
+        return "论文阅读笔记"
+    if "project" in lowered or "项目" in path:
+        return "项目方案、设计思路和推进记录"
+    if activities.get("paper_reading", 0) >= 3:
+        return "论文或资料阅读笔记"
+    if activities.get("project_planning", 0) >= 3:
+        return "项目方案、设计思路和推进记录"
     if activities.get("experiment_log", 0) >= 3:
-        return "实验/结果记录候选"
-    if activities.get("interview_review", 0) >= 3 or "interview" in lowered:
-        return "面试/复盘准备候选"
+        return "实验过程、结果和分析记录"
+    if activities.get("interview_review", 0) >= 3:
+        return "面试准备和复盘记录"
     if activities.get("daily_log", 0) >= 3:
-        return "日记/周期记录候选"
-    return "用途待用户确认"
+        return "日记或周期性记录"
+    return "用途不明确，需要用户补充说明"
 
 
 def render_vault_profile_draft(summary: dict[str, Any]) -> str:
-    overview = summary.get("overview", {})
+    folders = summary.get("folder_summaries", [])
+    mainlines = infer_active_mainlines_for_draft(folders)
     lines = [
-        "# Obsidian Vault Profile Draft",
+        "# Obsidian 知识库初始化理解草案",
         "",
-        "> This is a first-run draft for user calibration. It is not a periodic review report.",
-        "> Edit the User Calibration section in Obsidian, then run `/obsidian-review confirm-profile --vault <path>`.",
+        "请只校准下表中的“作用”。如果模型判断不对，直接改成你的真实理解即可。",
         "",
-        "## Metadata",
-        "",
-        f"- Generated at: {summary.get('generated_at')}",
-        f"- Vault: {summary.get('vault_path')}",
-        f"- Markdown files scanned: {overview.get('markdown_files', 0)}",
-        f"- Parsed blocks: {overview.get('blocks', 0)}",
-        f"- Top-level folders: {overview.get('top_level_folders', 0)}",
-        "",
-        "## Folder Role Candidates",
-        "",
-        "| Folder | Candidate role | Files | Evidence |",
-        "|---|---|---:|---|",
+        "| 文件夹 | 作用（模型初步判断，可直接修改） |",
+        "|---|---|",
     ]
-    for item in summary.get("folder_summaries", []):
-        evidence = ", ".join(item.get("sample_files", [])[:3])
-        lines.append(
-            f"| `{item.get('path')}` | {item.get('role_candidate')} | {item.get('file_count', 0)} | {evidence} |"
-        )
-
+    for item in folders:
+        lines.append(f"| `{item.get('path')}` | {item.get('role_candidate')} |")
     lines += [
         "",
-        "## Content Type Candidates",
+        "## 当前进行中的主线（模型初步判断，可直接修改）",
         "",
     ]
-    for item in summary.get("content_type_candidates", []):
-        lines.append(f"- {item.get('type')}: {item.get('count')} ({item.get('confidence')})")
-    if not summary.get("content_type_candidates"):
-        lines.append("- No clear content type candidates detected.")
-
-    lines += [
-        "",
-        "## Active Mainline Candidates",
-        "",
-    ]
-    for item in summary.get("active_topic_candidates", []):
-        sources = ", ".join([s for s in item.get("evidence_sources", []) if s])
-        lines.append(f"- {item.get('topic')} from `{item.get('folder')}` ({item.get('confidence')}) {sources}")
-    if not summary.get("active_topic_candidates"):
-        lines.append("- No active mainline candidates detected.")
-
-    lines += [
-        "",
-        "## Evidence Samples",
-        "",
-    ]
-    for item in summary.get("folder_summaries", [])[:20]:
-        lines.append(f"### {item.get('path')}")
-        lines.append("")
-        lines.append(f"- Candidate role: {item.get('role_candidate')}")
-        lines.append(f"- Latest modified file time: {item.get('latest_mtime') or 'unknown'}")
-        for point in item.get("sample_points", [])[:5]:
-            lines.append(f"- {point.get('source_link')}: {point.get('text')}")
-        lines.append("")
-
-    lines += [
-        "## User Calibration",
-        "",
-        "User-written content in this section has the highest priority. The agent may structure it, but must not overwrite it.",
-        "",
-        "### folder_roles",
-        "",
-        "<!-- Example: - AI-Agent/knowledge = paper notes and learning material, not an active project. -->",
-        "",
-        "### content_types",
-        "",
-        "<!-- Example: - Clippings = pending reading material. -->",
-        "",
-        "### active_mainlines",
-        "",
-        "<!-- Example: - Personal-review-agent Obsidian review workflow is an active mainline. -->",
-        "",
-        "### archive_or_ignore",
-        "",
-        "<!-- Example: - Archive/ = historical material, do not treat as current progress. -->",
-        "",
-        "### review_preferences",
-        "",
-        "<!-- Example: - Prefer project progress and unresolved blockers over reading-volume summaries. -->",
-        "",
-    ]
+    for item in mainlines:
+        lines.append(f"- **{item['name']}**：{item['description']}")
     return "\n".join(lines)
+
+
+def infer_active_mainlines_for_draft(folders: list[dict[str, Any]]) -> list[dict[str, str]]:
+    paths = {str(item.get("path", "")) for item in folders}
+    mainlines: list[dict[str, str]] = []
+    if any(path.startswith("AI-Agent") for path in paths):
+        mainlines.append(
+            {
+                "name": "Agent/RAG 学习与面试准备",
+                "description": "知识库中有较多 Agent 论文、框架资料、面试记录和复盘内容，说明这一方向可能是近期重点。",
+            }
+        )
+    if any(path.startswith("RAG") for path in paths):
+        mainlines.append(
+            {
+                "name": "RAG 项目与论文问答系统整理",
+                "description": "RAG 目录同时包含论文笔记和项目表达材料，可能服务于项目复盘、面试表达和后续改进。",
+            }
+        )
+    if any(path.startswith("MISGL") for path in paths):
+        mainlines.append(
+            {
+                "name": "MISGL/图神经网络实验整理",
+                "description": "MISGL 目录主要是实验结果、方法分析和图学习相关记录，可能是科研实验线索。",
+            }
+        )
+    if any(path.startswith("LLM") for path in paths):
+        mainlines.append(
+            {
+                "name": "LLM 基础与论文阅读",
+                "description": "LLM 目录更像基础知识和论文阅读积累，可作为 Agent/RAG 学习的底层支撑。",
+            }
+        )
+    return mainlines[:4] or [
+        {
+            "name": "主线待确认",
+            "description": "当前只能看到文件夹结构，无法可靠判断正在推进的主线，请在这里改成你的真实主线。",
+        }
+    ]
 
 
 def build_confirmed_profile(
@@ -817,10 +835,45 @@ def build_confirmed_profile(
 
 
 def extract_user_calibration(draft_text: str) -> dict[str, str]:
-    return {
+    calibration = {
         key: extract_markdown_subsection(draft_text, key)
         for key in ("folder_roles", "content_types", "active_mainlines", "archive_or_ignore", "review_preferences")
     }
+    if not calibration.get("folder_roles"):
+        calibration["folder_roles"] = extract_folder_role_table(draft_text)
+    if not calibration.get("active_mainlines"):
+        calibration["active_mainlines"] = extract_heading_section(
+            draft_text,
+            "当前进行中的主线",
+        )
+    return calibration
+
+
+def extract_heading_section(text: str, heading_prefix: str) -> str:
+    pattern = re.compile(rf"(?im)^##\s+{re.escape(heading_prefix)}.*$")
+    match = pattern.search(text or "")
+    if not match:
+        return ""
+    start = match.end()
+    next_match = re.search(r"(?m)^##\s+", text[start:])
+    end = start + next_match.start() if next_match else len(text)
+    return strip_html_comments(text[start:end]).strip()
+
+
+def extract_folder_role_table(text: str) -> str:
+    rows = []
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or "文件夹" in stripped or "---" in stripped:
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        folder = cells[0].strip("` ")
+        role = cells[1].strip()
+        if folder and role:
+            rows.append(f"{folder} = {role}")
+    return "\n".join(rows)
 
 
 def extract_markdown_subsection(text: str, heading: str) -> str:
@@ -965,6 +1018,11 @@ def make_block(block_type: str, rel: str, headings: list[str], start_line: int, 
     }
 
 
+def top_dir_of(rel: str) -> str:
+    parts = rel.split("/")
+    return parts[0] if len(parts) > 1 else ""
+
+
 def clean_heading(title: str) -> str:
     return title.strip().rstrip("#").strip()
 
@@ -1062,7 +1120,7 @@ def diff_snapshots(previous: dict[str, Any], current: dict[str, Any], period_inf
 
             if prev_block:
                 matched_prev_ids.add(block_id)
-                if is_open_todo(block) and is_open_todo(prev_block):
+                if file_changed and is_open_todo(block) and is_open_todo(prev_block):
                     item = dict(block)
                     item["status"] = "continued"
                     item["previous_text"] = prev_block.get("text", "")
@@ -1102,6 +1160,108 @@ def diff_snapshots(previous: dict[str, Any], current: dict[str, Any], period_inf
             changed.append(strip_internal_fields(item))
 
     return changed
+
+
+def diff_file_summaries(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+    period_info: dict[str, str],
+    vault_profile: dict[str, Any],
+) -> list[dict[str, Any]]:
+    prev_files = previous.get("files", {}) if isinstance(previous, dict) else {}
+    current_files = current.get("files", {}) if isinstance(current, dict) else {}
+    summaries: list[dict[str, Any]] = []
+    for rel, file_info in current_files.items():
+        if not file_in_period(file_info, period_info):
+            continue
+        prev_info = prev_files.get(rel)
+        if not prev_info:
+            file_status = "new"
+        elif file_info.get("content_hash") != prev_info.get("content_hash"):
+            file_status = "modified"
+        else:
+            continue
+        summaries.append(build_changed_file_summary(rel, file_info, file_status, vault_profile))
+    summaries.sort(key=lambda item: (-item.get("signal_score", 0), item.get("file", "")))
+    return summaries
+
+
+def period_file_summaries(
+    snapshot: dict[str, Any],
+    period_info: dict[str, str],
+    vault_profile: dict[str, Any],
+) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for rel, file_info in (snapshot.get("files", {}) if isinstance(snapshot, dict) else {}).items():
+        if file_in_period(file_info, period_info):
+            summaries.append(build_changed_file_summary(rel, file_info, "modified_in_period", vault_profile))
+    summaries.sort(key=lambda item: (-item.get("signal_score", 0), item.get("file", "")))
+    return summaries
+
+
+def build_changed_file_summary(
+    rel: str,
+    file_info: dict[str, Any],
+    file_status: str,
+    vault_profile: dict[str, Any],
+) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "file": rel,
+        "file_status": file_status,
+        "mtime": file_info.get("mtime"),
+        "size": file_info.get("size"),
+        "source_link": make_source_link(rel, []),
+        "top_dir": top_dir_of(rel),
+        "parent_dirs": rel.split("/")[:-1],
+        "activities": {},
+        "heading_paths": [],
+        "representative_points": [],
+        "todos": [],
+        "blockers": [],
+        "completed_or_outputs": [],
+        "source_links": [],
+        "_score": 0,
+    }
+    for block in file_info.get("blocks", []):
+        activity = block.get("candidate_activity", "unknown")
+        increment(item["activities"], activity)
+        heading_path = block.get("heading_path") or []
+        if heading_path and heading_path not in item["heading_paths"] and len(item["heading_paths"]) < 12:
+            item["heading_paths"].append(heading_path)
+        source_link = block.get("source_link")
+        if source_link and source_link not in item["source_links"] and len(item["source_links"]) < 16:
+            item["source_links"].append(source_link)
+        text = clean_digest_text(block.get("text", ""))
+        if not text or is_noise_block(block):
+            continue
+        score = block_signal_score(block)
+        item["_score"] += score
+        point = {
+            "type": block.get("type"),
+            "activity": activity,
+            "heading_path": heading_path,
+            "source_link": source_link,
+            "text": truncate_text(text, 260),
+        }
+        if is_todo_text(text):
+            append_limited(item["todos"], point, 10)
+        if is_blocker_text(text):
+            append_limited(item["blockers"], point, 10)
+        if is_completed_or_output_text(text, block):
+            append_limited(item["completed_or_outputs"], point, 10)
+        append_ranked_point(item["representative_points"], point, score, 8)
+    item["activities"] = dict(sorted(item["activities"].items()))
+    item["representative_points"] = [point for _score, point in item["representative_points"]]
+    profile_hint = confirmed_profile_hint(item, vault_profile)
+    if profile_hint:
+        item["topic_hint"] = profile_hint["topic"]
+        item["topic_confidence"] = "confirmed_profile"
+        item["profile_hint"] = profile_hint
+    else:
+        item["topic_hint"] = infer_topic_hint(item)
+        item["topic_confidence"] = "low_candidate"
+    item["signal_score"] = item.pop("_score", 0)
+    return item
 
 
 def index_blocks(files: dict[str, Any]) -> tuple[dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
@@ -1206,10 +1366,30 @@ def count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
-    meta = changed_payload.get("meta", {})
-    vault_profile = changed_payload.get("vault_profile") or {}
-    blocks = [b for b in changed_payload.get("blocks", []) if not is_noise_block(b)]
+def attach_changed_block_stats(file_summaries: list[dict[str, Any]], blocks: list[dict[str, Any]]) -> None:
+    by_file: dict[str, dict[str, dict[str, int]]] = {}
+    for block in blocks:
+        rel = block.get("file", "")
+        stats = by_file.setdefault(rel, {"changed_block_statuses": {}, "changed_block_activities": {}})
+        increment(stats["changed_block_statuses"], block.get("status", "unknown"))
+        increment(stats["changed_block_activities"], block.get("candidate_activity", "unknown"))
+    for item in file_summaries:
+        stats = by_file.get(item.get("file", ""), {})
+        item["changed_block_statuses"] = dict(sorted(stats.get("changed_block_statuses", {}).items()))
+        item["changed_block_activities"] = dict(sorted(stats.get("changed_block_activities", {}).items()))
+        item.setdefault("topic_hint", infer_topic_hint(item))
+        item.setdefault("topic_confidence", "low_candidate")
+        item.setdefault("source_links", [])
+        item.setdefault("representative_points", [])
+        item.setdefault("todos", [])
+        item.setdefault("blockers", [])
+        item.setdefault("completed_or_outputs", [])
+
+
+def file_summaries_from_changed_blocks(
+    blocks: list[dict[str, Any]],
+    vault_profile: dict[str, Any],
+) -> list[dict[str, Any]]:
     files: dict[str, dict[str, Any]] = {}
     for block in blocks:
         rel = block.get("file", "")
@@ -1220,7 +1400,8 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
                 "source_link": make_source_link(rel, []),
                 "top_dir": block.get("top_dir", ""),
                 "parent_dirs": block.get("parent_dirs", []),
-                "statuses": {},
+                "file_status": "changed",
+                "changed_block_statuses": {},
                 "activities": {},
                 "heading_paths": [],
                 "representative_points": [],
@@ -1231,7 +1412,7 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
                 "_score": 0,
             },
         )
-        increment(item["statuses"], block.get("status", "unknown"))
+        increment(item["changed_block_statuses"], block.get("status", "unknown"))
         increment(item["activities"], block.get("candidate_activity", "unknown"))
         heading_path = block.get("heading_path") or []
         if heading_path and heading_path not in item["heading_paths"] and len(item["heading_paths"]) < 8:
@@ -1262,7 +1443,7 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
 
     file_summaries = []
     for item in files.values():
-        item["statuses"] = dict(sorted(item["statuses"].items()))
+        item["changed_block_statuses"] = dict(sorted(item["changed_block_statuses"].items()))
         item["activities"] = dict(sorted(item["activities"].items()))
         profile_hint = confirmed_profile_hint(item, vault_profile)
         if profile_hint:
@@ -1277,6 +1458,19 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
         item["signal_score"] = score
         file_summaries.append(item)
     file_summaries.sort(key=lambda x: (-x.get("signal_score", 0), x.get("file", "")))
+    return file_summaries
+
+
+def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
+    meta = changed_payload.get("meta", {})
+    vault_profile = changed_payload.get("vault_profile") or {}
+    blocks = [b for b in changed_payload.get("blocks", []) if not is_noise_block(b)]
+    changed_files = changed_payload.get("changed_files") or []
+    if changed_files:
+        file_summaries = [dict(item) for item in changed_files if isinstance(item, dict)]
+        attach_changed_block_stats(file_summaries, blocks)
+    else:
+        file_summaries = file_summaries_from_changed_blocks(blocks, vault_profile)
 
     topic_summaries: dict[str, dict[str, Any]] = {}
     for item in file_summaries:
@@ -1286,8 +1480,9 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "topic": topic,
                 "files": [],
+                "file_status_counts": {},
                 "activity_counts": {},
-                "status_counts": {},
+                "changed_block_status_counts": {},
                 "key_points": [],
                 "todos": [],
                 "blockers": [],
@@ -1295,10 +1490,12 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
             },
         )
         append_limited(summary["files"], item["file"], 12)
+        file_status = item.get("file_status") or "changed"
+        summary["file_status_counts"][file_status] = summary["file_status_counts"].get(file_status, 0) + 1
         for key, value in item.get("activities", {}).items():
             summary["activity_counts"][key] = summary["activity_counts"].get(key, 0) + value
-        for key, value in item.get("statuses", {}).items():
-            summary["status_counts"][key] = summary["status_counts"].get(key, 0) + value
+        for key, value in item.get("changed_block_statuses", {}).items():
+            summary["changed_block_status_counts"][key] = summary["changed_block_status_counts"].get(key, 0) + value
         for point in item.get("representative_points", [])[:2]:
             append_limited(summary["key_points"], point, 10)
         for point in item.get("todos", [])[:3]:
@@ -1310,7 +1507,7 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
 
     digest_meta = dict(meta)
     digest_meta["digest_note"] = (
-        "This digest is the preferred LLM input. changed_blocks.latest.json is the full evidence file for lookup only."
+        "This digest is the preferred LLM input. changed/new files are the primary evidence; changed_blocks.latest.json is detail evidence for lookup only."
     )
     digest_meta["file_summary_count"] = len(file_summaries)
     digest_meta["topic_summary_count"] = len(topic_summaries)
@@ -1323,6 +1520,8 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
             "period": meta.get("period"),
             "date_start": meta.get("date_start"),
             "date_end": meta.get("date_end"),
+            "changed_files_count": meta.get("changed_files_count"),
+            "changed_file_status_counts": meta.get("changed_file_status_counts"),
             "changed_blocks_count": meta.get("changed_blocks_count"),
             "first_baseline_warning": (
                 "首次基线复盘只表示这些文件在本周期修改过；不要声称所有内容都是本周期新完成。"
@@ -1589,11 +1788,13 @@ def report_outline() -> list[str]:
 
 def writing_guidelines(run_mode: str) -> list[str]:
     guidelines = [
+        "以本周期新增/修改的文件为第一证据入口，必须覆盖这些文件；changed blocks 只用于定位文件内细节。",
+        "每个有变化的 confirmed profile 主题都要总结一条逻辑线：本周期哪些文件变化、它们共同说明什么进展、下一步是什么。",
         "按主题串联工作脉络，不要按文件机械罗列。",
         "关键结论尽量引用 block.source_link。",
         "把未完成 checkbox、TODO、blocked、疑问和风险整理到阻塞或继承事项。",
         "内容产出只能表述为学习、整理、形成方案、记录实验等，不要过度声称完成。",
-        "preferred_topics 是偏好，不是限制；最终主题应服从 changed blocks 的证据。",
+        "preferred_topics 是偏好，不是限制；最终主题应服从本周期新增/修改文件的证据。",
     ]
     if run_mode == "first_baseline":
         guidelines.append("这是首次基线复盘：只能说基于本周期修改文件生成，不要声称所有 blocks 都是本周期新增。")
@@ -1602,7 +1803,9 @@ def writing_guidelines(run_mode: str) -> list[str]:
 
 def digest_writing_guidelines(run_mode: str) -> list[str]:
     guidelines = [
-        "优先阅读 review_digest.latest.json；changed_blocks.latest.json 只用于必要时查证来源。",
+        "优先阅读 review_digest.latest.json 中的 executive_input、topic_summaries、file_summaries；file_summaries 是主证据。",
+        "不要把 changed blocks 当作报告基点；changed_blocks.latest.json 只用于必要时查证某个文件内的具体来源。",
+        "必须总结所有 file_summaries 里的新增/修改文件；若同一主题下有多个文件，要写成一条逻辑线，而不是逐条罗列 block。",
         "禁止逐条罗列 block 或写成 `[[source]]: 原文片段` 清单。",
         "报告必须是复盘文章：先总览，再按主题串联进展、产出、问题和下一步。",
         "每个主题最多列 3-6 个关键来源，source_link 已经是 Obsidian 双链，必须原样使用，不要再包一层 [[...]]。",
