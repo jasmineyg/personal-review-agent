@@ -140,7 +140,6 @@ _I18N: dict[str, dict[str, str]] = {
         'help.sessions':        '  /sessions            List all sessions',
         'help.llm':             '  /llm [n]             View / switch model',
         'help.btw':             '  /btw <question>      Side question — does not interrupt main agent',
-        'help.review':          '  /review [request]    In-session code review (report inline)',
         'help.rewind':          '  /rewind [n]          Rewind the last n rounds',
         'help.continue':        '  /continue [n|name]   List / restore historical sessions',
         'help.new':             '  /new [name]          Start a new session (clears the current one)',
@@ -172,7 +171,6 @@ _I18N: dict[str, dict[str, str]] = {
         'cmd.status.desc':      'View session status',
         'cmd.llm.desc':         'View / switch model',
         'cmd.btw.desc':         'Side question — does not interrupt main agent',
-        'cmd.review.desc':      'In-session code review',
         'cmd.rewind.desc':      'Rewind the last n rounds',
         'cmd.continue.desc':    'List / restore historical sessions',
         'cmd.new.desc':         'Start a new session',
@@ -188,7 +186,6 @@ _I18N: dict[str, dict[str, str]] = {
         # _CMDS arg hints — mirror v2 (lowercase n, full word "question").
         'cmd.llm.arg':          '[n]',
         'cmd.btw.arg':          '<question>',
-        'cmd.review.arg':       '[request]',
         'cmd.rewind.arg':       '[n]',
         'cmd.continue.arg':     '[n|name]',
         'cmd.new.arg':          '[name]',
@@ -259,7 +256,6 @@ _I18N: dict[str, dict[str, str]] = {
         'msg.export_clip_failed': '❌ copy failed: no clipboard tool found',
         'msg.export_all':       'full log:\n{path}',
         'msg.export_all_missing': 'no log file yet',
-        'msg.review_empty':     '(review produced no output)',
         'msg.no_export':        '(no reply to export)',
         'msg.no_tracker':       '(no stats yet)',
         'msg.no_history':       '  no restorable historical sessions',
@@ -407,7 +403,6 @@ _I18N: dict[str, dict[str, str]] = {
         'help.sessions':        '  /sessions            列出所有会话',
         'help.llm':             '  /llm [n]             查看 / 切换模型',
         'help.btw':             '  /btw <question>      旁问 — 不打断主 agent',
-        'help.review':          '  /review [request]    in-session 代码审查（直接输出报告）',
         'help.rewind':          '  /rewind [n]          回退最近 n 轮',
         'help.continue':        '  /continue [n|name]   列出 / 恢复历史会话',
         'help.new':             '  /new [name]          新建会话（清空当前会话）',
@@ -439,7 +434,6 @@ _I18N: dict[str, dict[str, str]] = {
         'cmd.status.desc':      '查看会话状态',
         'cmd.llm.desc':         '查看 / 切换模型',
         'cmd.btw.desc':         '旁问 — 不打断主 agent',
-        'cmd.review.desc':      'in-session 代码审查',
         'cmd.rewind.desc':      '回退最近 n 轮',
         'cmd.continue.desc':    '列出 / 恢复历史会话',
         'cmd.new.desc':         '新建会话',
@@ -455,7 +449,6 @@ _I18N: dict[str, dict[str, str]] = {
         # arg hints — 与 v2 对齐：小写 n、完整的 question 等。
         'cmd.llm.arg':          '[n]',
         'cmd.btw.arg':          '<question>',
-        'cmd.review.arg':       '[request]',
         'cmd.rewind.arg':       '[n]',
         'cmd.continue.arg':     '[n|name]',
         'cmd.new.arg':          '[name]',
@@ -526,7 +519,6 @@ _I18N: dict[str, dict[str, str]] = {
         'msg.export_clip_failed': '❌ 复制失败：未找到剪贴板工具',
         'msg.export_all':       '完整日志:\n{path}',
         'msg.export_all_missing': '尚无日志文件',
-        'msg.review_empty':     '(review 无输出)',
         'msg.no_export':        '（没有可导出的回答）',
         'msg.no_tracker':       '（暂无统计）',
         'msg.no_history':       '  没有可恢复的历史会话',
@@ -1866,7 +1858,6 @@ def _cmds() -> list[tuple[str, str, str]]:
         ('/status',   '',                       _t('cmd.status.desc')),
         ('/llm',      _t('cmd.llm.arg'),        _t('cmd.llm.desc')),
         ('/btw',      _t('cmd.btw.arg'),        _t('cmd.btw.desc')),
-        ('/review',   _t('cmd.review.arg'),     _t('cmd.review.desc')),
         # ── slash_cmds bundle (same set as v2; descriptions kept inline
         # /scheduler stays an interactive multi-pick menu; the rest fold
         # into prompt-injection turns.  All bundle rows now route through
@@ -4412,7 +4403,7 @@ class SB:
         ag = self._bridge.agent
         # /btw is deliberately NOT idle-only — a side question must be fireable
         # while the main agent runs (that's its whole purpose).
-        idle_only = {'clear', 'export', 'review', 'rewind', 'continue'}
+        idle_only = {'clear', 'export', 'rewind', 'continue'}
         if name in idle_only and self._running:
             self.commit([_t('err.running_blocked')]); return
         if name in ('q', 'quit', 'exit'):
@@ -4605,18 +4596,6 @@ class SB:
             self._btws.append(entry)
             threading.Thread(target=self._btw, args=(entry,), daemon=True).start()
             self._render_live()
-        elif name == 'review':
-            from frontends import review_cmd
-            dq = queue.Queue()
-            prompt = review_cmd.handle(ag, arg, dq)
-            if prompt:
-                self._submit(prompt, [])
-            else:
-                try:
-                    text = dq.get_nowait().get('done', '')
-                    self.commit(Block('assistant', text))   # markdown re-renders on resize
-                except queue.Empty:
-                    self.commit([_t('msg.review_empty')])
         elif name == 'resume':
             # GA's _handle_slash_cmd (agentmain.py:124) replaces `/resume`
             # with a session-recovery prompt before the LLM sees it.  We
@@ -4876,7 +4855,6 @@ class SB:
                          _t('help.sessions'),
                          _t('help.llm'),
                          _t('help.btw'),
-                         _t('help.review'),
                          _t('help.rewind'),
                          _t('help.resume'),
                          _t('help.continue'),

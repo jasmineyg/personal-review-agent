@@ -386,90 +386,19 @@ LLM_PROVIDERS = [
 PLATFORMS = [
     {
         'id': 'none',
-        'name': '不使用消息平台（纯终端 REPL）',
-        'desc': '直接用 python agentmain.py 在终端交互',
+        'name': 'No messaging platform (terminal/desktop only)',
+        'desc': 'Use python agentmain.py, ga tui, or the desktop bridge directly.',
         'deps': [],
     },
     {
-        'id': 'telegram',
-        'name': 'Telegram 机器人',
-        'desc': '通过 Telegram Bot 与 Agent 对话',
-        'file': 'frontends/tgapp.py',
-        'deps': ['python-telegram-bot'],
-        'env_vars': [
-            {'key': 'tg_bot_token', 'label': 'Bot Token', 'hint': '从 @BotFather 获取'},
-            {'key': 'tg_allowed_users', 'label': '允许的用户 ID（逗号分隔, 留空=所有人）', 'default': '[]', 'is_list': True},
-        ],
-    },
-    {
-        'id': 'qq',
-        'name': 'QQ 机器人',
-        'desc': '通过 QQ 官方机器人 API 接入',
-        'file': 'frontends/qqapp.py',
-        'deps': ['qq-botpy'],
-        'env_vars': [
-            {'key': 'qq_app_id', 'label': 'App ID', 'hint': 'QQ 开放平台获取'},
-            {'key': 'qq_app_secret', 'label': 'App Secret'},
-            {'key': 'qq_allowed_users', 'label': '允许的用户 OpenID（逗号分隔, 留空=所有人）', 'default': '[]', 'is_list': True},
-        ],
-    },
-    {
-        'id': 'feishu',
-        'name': '飞书机器人',
-        'desc': '通过飞书应用与 Agent 对话',
-        'file': 'frontends/fsapp.py',
-        'deps': ['lark-oapi'],
-        'env_vars': [
-            {'key': 'fs_app_id', 'label': 'App ID', 'hint': '飞书开放平台获取'},
-            {'key': 'fs_app_secret', 'label': 'App Secret'},
-            {'key': 'fs_allowed_users', 'label': '允许的用户（逗号分隔, 留空=所有人）', 'default': '[]', 'is_list': True},
-        ],
-    },
-    {
-        'id': 'wecom',
-        'name': '企业微信机器人',
-        'desc': '通过企业微信 Bot 接入',
-        'file': 'frontends/wecomapp.py',
-        'deps': ['wecombot'],
-        'env_vars': [
-            {'key': 'wecom_bot_id', 'label': 'Bot ID'},
-            {'key': 'wecom_secret', 'label': 'Bot Secret'},
-            {'key': 'wecom_allowed_users', 'label': '允许的用户（逗号分隔, 留空=所有人）', 'default': '[]', 'is_list': True},
-        ],
-    },
-    {
-        'id': 'dingtalk',
-        'name': '钉钉机器人',
-        'desc': '通过钉钉应用接入',
-        'file': 'frontends/dingtalkapp.py',
-        'deps': ['dingtalk-sdk'],
-        'env_vars': [
-            {'key': 'dingtalk_client_id', 'label': 'Client ID (App Key)'},
-            {'key': 'dingtalk_client_secret', 'label': 'Client Secret (App Secret)'},
-            {'key': 'dingtalk_allowed_users', 'label': '允许的用户 StaffID（逗号分隔, 留空=所有人）', 'default': '[]', 'is_list': True},
-        ],
-    },
-    {
-        'id': 'discord',
-        'name': 'Discord 机器人',
-        'desc': '通过 Discord Bot 接入',
-        'file': 'frontends/dcapp.py',
-        'deps': ['discord.py'],
-        'env_vars': [
-            {'key': 'dc_bot_token', 'label': 'Bot Token', 'hint': 'Discord Developer Portal 获取'},
-            {'key': 'dc_allowed_users', 'label': '允许的用户 ID（逗号分隔, 留空=所有人）', 'default': '[]', 'is_list': True},
-        ],
-    },
-    {
         'id': 'wechat',
-        'name': '微信 (iLink 协议)',
-        'desc': '通过微信个人号与 Agent 对话，扫码自动登录',
+        'name': 'WeChat (iLink)',
+        'desc': 'Chat with the agent through a personal WeChat account.',
         'file': 'frontends/wechatapp.py',
         'deps': ['requests', 'qrcode', 'pycryptodome'],
         'env_vars': [],
     },
 ]
-
 
 def _masked(v, reveal, tail):
     """生成脱敏字符串：前 reveal 位明文 + * + 后 tail 位明文"""

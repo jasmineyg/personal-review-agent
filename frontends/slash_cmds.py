@@ -287,7 +287,7 @@ def list_reflect_tasks() -> list[dict]:
 
 # ----- hub.pyw parity: every launchable service ---------------------------
 
-_HUB_EXCLUDES = {"goal_mode.py", "chatapp_common.py", "tuiapp.py"}
+_HUB_EXCLUDES = {"goal_mode.py"}
 
 
 def _sniff_doc(p) -> str:
@@ -341,11 +341,7 @@ def list_launchable_services() -> list[dict]:
             if "app" not in p.name or p.name in _HUB_EXCLUDES:
                 continue
             rel = "frontends/" + p.name
-            if "stapp" in p.name:
-                cmd = [sys.executable, "-m", "streamlit", "run", rel,
-                       "--server.headless=true"]
-            else:
-                cmd = [sys.executable, rel]
+            cmd = [sys.executable, rel]
             out.append({"name": rel, "cmd": cmd, "doc": _sniff_doc(p),
                         "kind": "frontend"})
     return out

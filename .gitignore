@@ -108,12 +108,6 @@ memory/L4_raw_sessions/*
 !memory/checklist_helper.py
 !memory/checklist_sop.md
 
-# Code Review Principles
-!memory/code_review_principles.md
-
-# Review Mode SOP
-!memory/review_sop.md
-
 # Obsidian Review Skill
 !memory/obsidian_review_sop.md
 !memory/obsidian_profile_init_sop.md
