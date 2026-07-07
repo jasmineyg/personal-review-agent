@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "confirmed_at": null,
+  "confirmation_source": null,
+  "user_preferences": {
+    "review_language": "zh-CN",
+    "review_style": [
+      "结论先行",
+      "按长期主线组织",
+      "避免逐条 block 罗列"
+    ],
+    "decision_style": [],
+    "privacy_preferences": []
+  },
+  "workflow_preferences": [],
+  "long_term_traits": [],
+  "review_focus": [],
+  "confirmation_history": []
+}

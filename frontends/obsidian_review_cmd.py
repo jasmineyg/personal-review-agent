@@ -48,8 +48,8 @@ def _help_text() -> str:
         "`/obsidian-review confirm-profile --vault D:\\download\\Obsidian\\Jasmine`\n"
         "`/obsidian-review this-week --vault D:\\download\\Obsidian\\Jasmine`\n"
         "`/obsidian-review --from 2026-06-01 --vault D:\\download\\Obsidian\\Jasmine`\n\n"
-        "首次进入 Vault 必须先 init-profile，用户在 Obsidian 中编辑 "
-        "`Reviews/_AgentProfile/vault_profile.draft.md` 后再 confirm-profile。"
+        "首次进入 Vault 必须先 init-profile，用户在 Obsidian 中维护 "
+        "`Reviews/_AgentProfile/vault_profile.draft.md` 的用户确认区；首次建模后运行一次 confirm-profile 建立 baseline。"
     )
 
 
@@ -165,13 +165,14 @@ def _profile_command(user_request: str, display_queue=None) -> Optional[str]:
             "Obsidian 环境模型草案已生成。\n\n"
             f"- 草案路径：{data.get('profile_draft')}\n"
             f"- 扫描 Markdown 文件数：{data.get('markdown_files')}\n"
-            "- 下一步：在 Obsidian 中直接修改 `Reviews/_AgentProfile/vault_profile.draft.md` 表格里的“作用”列，"
-            "然后运行 `/obsidian-review confirm-profile --vault <path>`。"
+            "- 下一步：在 Obsidian 中直接维护 `Reviews/_AgentProfile/vault_profile.draft.md` 的“用户确认区”，"
+            "首次建模完成后运行一次 `/obsidian-review confirm-profile --vault <path>` 建立初始 snapshot。"
         )
     else:
         message = (
             "Obsidian 环境模型已确认，初始 review snapshot 已按确认时 Vault 状态建立。\n\n"
             f"- confirmed profile：{data.get('confirmed_profile')}\n"
+            f"- L1 context：{data.get('l1_context')}\n"
             f"- snapshot：{data.get('snapshot')}\n"
             f"- 扫描 Markdown 文件数：{data.get('markdown_files')}\n"
             "- 现在可以运行周期复盘命令，例如 `/obsidian-review this-week --vault <path>`。"
@@ -215,6 +216,8 @@ def render_report_prompt(user_request: str, prepared: dict) -> str:
     review_digest_file = prepared.get("review_digest_file", "")
     suggested_report = prepared.get("suggested_report", "")
     profile_update_file = prepared.get("vault_profile_update_file", "")
+    profile_draft = prepared.get("profile_draft", "")
+    draft_candidates_added = prepared.get("profile_draft_candidates_added", 0)
     period = prepared.get("period", "")
     date_start = prepared.get("date_start", "")
     date_end = prepared.get("date_end", "")
@@ -238,8 +241,8 @@ GenericAgent 已经完成确定性准备步骤，prepare 输出如下：
 必须按顺序执行：
 
 1. 读取 `{SOP_PATH}`，确认报告结构。
-2. 读取 `{review_digest_file}` 作为主要写作输入，其中包含用户已确认的 vault profile 上下文。
-3. 报告必须以 `review_digest.latest.json` 里的 `file_summaries` 为第一证据，覆盖本周期所有新增/修改文件；再按 confirmed profile 的主题把这些文件串成逻辑线。
+2. 读取 `{review_digest_file}` 作为主要写作输入，其中包含从 `vault_profile.draft.md` 用户确认区解析出的 profile 上下文。
+3. 报告必须以 `review_digest.latest.json` 里的 `file_summaries` 为第一证据，覆盖本周期所有新增/修改文件；再按用户确认区的主题把这些文件串成逻辑线。
 4. 只有当 digest 的来源不够清楚时，才读取 `{changed_blocks_file}` 查证文件内细节；不要把 changed blocks 当作报告基点，也不要直接扫描整个 Vault。
 5. 按 SOP 的固定章节生成 Markdown 复盘报告，写入：
    `{suggested_report}`
@@ -247,9 +250,10 @@ GenericAgent 已经完成确定性准备步骤，prepare 输出如下：
    - `open_items`
    - `blockers`
    - `active_topics`
-7. 如果发现新的文件夹用途、长期目标、活跃主线候选，只能把建议写入：
-   `{profile_update_file}`
-   不得自动合并到 confirmed profile。
+7. prepare 已经把自动候选写入 `{profile_update_file}`；如有可展示的新增候选，也可能已经追加到：
+   `{profile_draft}`
+   本次自动追加候选数：{draft_candidates_added}
+   不要改写 profile draft 的“用户确认区”。
 8. 报告写成功后运行 finalize：
    `python "{SCRIPT_PATH}" finalize{vault_arg} --report "{suggested_report}"`
 9. 最后只向用户汇报：
@@ -257,13 +261,14 @@ GenericAgent 已经完成确定性准备步骤，prepare 输出如下：
    - 本次周期和时间范围：{period}，{date_start} 到 {date_end}
    - changed/new files 数量：{changed_files}
    - changed blocks 数量：{changed_blocks}
+   - profile draft 是否追加候选：{draft_candidates_added}
    - 是否 finalize 成功
 
 硬约束：
 - 隐私过滤必须发生在 LLM 读内容前；写报告优先基于 `review_digest.latest.json`。
-- confirmed profile 是文件夹用途、长期目标、活跃主线的最高优先级上下文。
-- `infer_topic_hint()` 相关内容只能当低置信候选，不得覆盖 confirmed profile。
-- `vault_profile_update.latest.json` 只表示建议更新，不自动合并关键判断。
+- `vault_profile.draft.md` 用户确认区是文件夹用途、长期目标、活跃主线的最高优先级上下文。
+- `infer_topic_hint()` 相关内容只能当低置信候选，不得覆盖用户确认区。
+- `vault_profile_update.latest.json` 和 profile draft 的 Agent 候选区只表示建议，不是 confirmed facts。
 - `review_digest.latest.json` 是主要输入；其中 `file_summaries` 是主证据，`changed_blocks.latest.json` 只是细节查证文件。
 - 必须总结本周期所有新增/修改文件；每个有变化的用户主题都要形成一条逻辑线。
 - 禁止把报告写成 `[[来源]]: 原文片段` 列表；必须按主题写逻辑串联总结。

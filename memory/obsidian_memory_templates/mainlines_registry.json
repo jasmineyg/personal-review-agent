@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "mainlines": [
+    {
+      "id": "example_mainline",
+      "name": "示例主线",
+      "status": "active",
+      "confidence": "template_only",
+      "sources": [],
+      "profile_path": ".obsidian-review-agent/memory/mainlines/example_mainline.md",
+      "sop_path": ".obsidian-review-agent/memory/sops/example_mainline_sop.md",
+      "created_at": null,
+      "last_reviewed_at": null,
+      "last_updated_at": null
+    }
+  ]
+}

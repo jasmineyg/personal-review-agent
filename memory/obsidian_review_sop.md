@@ -21,5 +21,5 @@
 ## 总原则
 
 - 首次运行只建立环境模型草案，不直接周期复盘。
-- 用户校准后的 confirmed profile 是后续复盘的最高优先级上下文。
+- `vault_profile.draft.md` 的用户确认区是后续复盘的最高优先级上下文；confirmed profile JSON 是自动缓存。
 - 周期复盘只读周期 SOP，避免模型在长文中混淆阶段。

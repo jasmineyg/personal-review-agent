@@ -174,7 +174,7 @@ def cmd_profile_init(args: argparse.Namespace) -> dict[str, Any]:
         "markdown_files": summary["overview"]["markdown_files"],
         "folders": len(summary["folder_summaries"]),
         "skipped": skipped,
-        "next": "Edit Reviews/_AgentProfile/vault_profile.draft.md in Obsidian, then run /obsidian-review confirm-profile --vault <path>.",
+        "next": "Maintain Reviews/_AgentProfile/vault_profile.draft.md 用户确认区 in Obsidian, then run /obsidian-review confirm-profile --vault <path> once to establish the initial snapshot.",
     }
 
 
@@ -203,6 +203,7 @@ def cmd_profile_confirm(args: argparse.Namespace) -> dict[str, Any]:
 
     atomic_write_json(confirmed_path, confirmed_profile)
     atomic_write_json(snapshot_path, snapshot)
+    l1_path = write_runtime_l1_context(vault, config, confirmed_profile, run_at)
 
     return {
         "ok": True,
@@ -211,10 +212,11 @@ def cmd_profile_confirm(args: argparse.Namespace) -> dict[str, Any]:
         "config_path": str(config_path),
         "profile_draft": str(draft_path),
         "confirmed_profile": str(confirmed_path),
+        "l1_context": str(l1_path),
         "snapshot": str(snapshot_path),
         "markdown_files": summary["overview"]["markdown_files"],
         "skipped": skipped,
-        "next": "Confirmed profile saved. Periodic /obsidian-review runs can now use this calibrated vault model.",
+        "next": "Initial profile baseline saved. Future periodic /obsidian-review runs will re-read vault_profile.draft.md and refresh runtime memory automatically.",
     }
 
 
@@ -247,8 +249,19 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
             "Missing initial review snapshot. Run /obsidian-review confirm-profile --vault <path> "
             "to establish the confirmed baseline from the current Vault."
         )
-    previous_state = load_json(state_dir / "review_state.json", default={})
     current_snapshot, skipped = build_snapshot(vault, config, run_at)
+    previous_state = load_json(state_dir / "review_state.json", default={})
+    profile_draft_path = vault / config.get("profile_draft_dir", "Reviews/_AgentProfile") / "vault_profile.draft.md"
+    if profile_draft_path.exists() and profile_draft_path.is_file():
+        draft_text = profile_draft_path.read_text(encoding="utf-8-sig", errors="replace")
+        summary = build_vault_profile_summary(current_snapshot, skipped, config, run_at)
+        confirmed_profile = build_confirmed_profile(draft_text, summary, config, vault, profile_draft_path, run_at)
+        confirmed_profile["profile_source_mode"] = "draft_markdown_runtime_source"
+        atomic_write_json(confirmed_profile_path, confirmed_profile)
+    else:
+        confirmed_profile["profile_source_mode"] = "confirmed_json_cache"
+    l1_path = write_runtime_l1_context(vault, config, confirmed_profile, run_at)
+
     if isinstance(previous_state, dict) and not previous_state.get("last_run"):
         changed_files = period_file_summaries(current_snapshot, period_info, confirmed_profile)
         changed_blocks = first_baseline_blocks(current_snapshot, period_info)
@@ -279,6 +292,8 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "preferred_topics": config.get("preferred_topics", []),
         "topic_mode": config.get("topic_mode", "auto_with_preferences"),
         "vault_profile_file": rel_to_vault(confirmed_profile_path, vault),
+        "vault_profile_draft_file": rel_to_vault(profile_draft_path, vault) if profile_draft_path.exists() else "",
+        "vault_profile_source_mode": confirmed_profile.get("profile_source_mode"),
         "vault_profile_confirmed_at": confirmed_profile.get("confirmed_at"),
         "vault_profile_update_file": rel_to_vault(profile_update_path, vault),
         "suggested_report": rel_to_vault(suggested_report, vault),
@@ -304,6 +319,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
     atomic_write_json(digest_path, digest_payload)
     atomic_write_json(pending_path, current_snapshot)
     atomic_write_json(profile_update_path, profile_update_payload)
+    draft_candidates_added = append_profile_candidates_to_draft(profile_draft_path, profile_update_payload, run_at)
 
     return {
         "ok": True,
@@ -319,9 +335,12 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "review_digest_file": str(digest_path),
         "pending_snapshot": str(pending_path),
         "confirmed_profile": str(confirmed_profile_path),
+        "profile_draft": str(profile_draft_path) if profile_draft_path.exists() else "",
+        "l1_context": str(l1_path),
         "vault_profile_update_file": str(profile_update_path),
+        "profile_draft_candidates_added": draft_candidates_added,
         "suggested_report": str(suggested_report),
-        "next": "Generate the Markdown report from review_digest.latest.json using changed/new files as the primary evidence and changed_blocks.latest.json only for detail lookup, write review_state_update.latest.json and optional vault_profile_update.latest.json suggestions, then run finalize.",
+        "next": "Generate the Markdown report from review_digest.latest.json using changed/new files as the primary evidence and changed_blocks.latest.json only for detail lookup, write review_state_update.latest.json, note any profile candidates appended to vault_profile.draft.md, then run finalize.",
     }
 
 
@@ -729,9 +748,13 @@ def render_vault_profile_draft(summary: dict[str, Any]) -> str:
     folders = summary.get("folder_summaries", [])
     mainlines = infer_active_mainlines_for_draft(folders)
     lines = [
-        "# Obsidian 知识库初始化理解草案",
+        "# Vault Profile",
         "",
-        "请只校准下表中的“作用”。如果模型判断不对，直接改成你的真实理解即可。",
+        "这个文件是 Review Agent 理解你的 Obsidian 的主要入口。你只需要维护“用户确认区”；Agent 可以在“Agent 候选区”追加建议。",
+        "",
+        "## 用户确认区",
+        "",
+        "### 文件夹用途",
         "",
         "| 文件夹 | 作用（模型初步判断，可直接修改） |",
         "|---|---|",
@@ -740,11 +763,35 @@ def render_vault_profile_draft(summary: dict[str, Any]) -> str:
         lines.append(f"| `{item.get('path')}` | {item.get('role_candidate')} |")
     lines += [
         "",
-        "## 当前进行中的主线（模型初步判断，可直接修改）",
+        "### 长期主线",
         "",
     ]
     for item in mainlines:
         lines.append(f"- **{item['name']}**：{item['description']}")
+    lines += [
+        "",
+        "### 复盘偏好",
+        "",
+        "- 结论先行",
+        "- 按长期主线组织",
+        "- 避免逐条 block 罗列",
+        "",
+        "## Agent 候选区",
+        "",
+        "> 以下内容由 Agent 自动追加。你可以直接修改、删除，或移动到“用户确认区”。",
+        "",
+        "### 新文件夹候选",
+        "",
+        "暂无。",
+        "",
+        "### 新主线候选",
+        "",
+        "暂无。",
+        "",
+        "### 已确认内容的修改建议",
+        "",
+        "暂无。",
+    ]
     return "\n".join(lines)
 
 
@@ -839,6 +886,9 @@ def extract_user_calibration(draft_text: str) -> dict[str, str]:
         key: extract_markdown_subsection(draft_text, key)
         for key in ("folder_roles", "content_types", "active_mainlines", "archive_or_ignore", "review_preferences")
     }
+    calibration["folder_roles"] = calibration.get("folder_roles") or extract_markdown_subsection(draft_text, "文件夹用途")
+    calibration["active_mainlines"] = calibration.get("active_mainlines") or extract_markdown_subsection(draft_text, "长期主线")
+    calibration["review_preferences"] = calibration.get("review_preferences") or extract_markdown_subsection(draft_text, "复盘偏好")
     if not calibration.get("folder_roles"):
         calibration["folder_roles"] = extract_folder_role_table(draft_text)
     if not calibration.get("active_mainlines"):
@@ -1532,8 +1582,8 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
         "topic_summaries": sorted(topic_summaries.values(), key=lambda x: (-len(x.get("key_points", [])), x["topic"])),
         "vault_profile_context": compact_vault_profile(vault_profile),
         "profile_update_policy": (
-            "Folder roles, long-term goals, and active mainlines from the confirmed profile must not be overwritten. "
-            "Write only suggestions to vault_profile_update.latest.json when new evidence appears."
+            "Folder roles, long-term goals, and active mainlines from vault_profile.draft.md 用户确认区 must not be overwritten. "
+            "Write new evidence only as suggestions in vault_profile_update.latest.json and Agent 候选区."
         ),
         "file_summaries": file_summaries[:80],
         "open_items": collect_points(file_summaries, "todos", 30),
@@ -1613,6 +1663,63 @@ def compact_vault_profile(profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def write_runtime_l1_context(
+    vault: Path,
+    config: dict[str, Any],
+    profile: dict[str, Any],
+    run_at: datetime,
+) -> Path:
+    state_dir = vault / config.get("state_dir", ".obsidian-review-agent")
+    memory_dir = state_dir / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    path = memory_dir / "l1_context.md"
+    draft_rel = config.get("profile_draft_dir", "Reviews/_AgentProfile") + "/vault_profile.draft.md"
+    mainlines = profile.get("active_mainlines", []) if isinstance(profile, dict) else []
+    prefs = profile.get("review_preferences", []) if isinstance(profile, dict) else []
+
+    lines = [
+        "# Review Agent L1",
+        "",
+        "L0: memory/obsidian_memory_management_sop.md",
+        f"ProfileDraft: {draft_rel}",
+        "VaultProfileCache: .obsidian-review-agent/vault_profile.confirmed.json",
+        "Mainlines: .obsidian-review-agent/memory/mainlines_registry.json",
+        "SOPs: .obsidian-review-agent/memory/sops/*.md",
+        "Pending: .obsidian-review-agent/memory/profile_updates.pending.jsonl",
+        "History: .obsidian-review-agent/memory/profile_updates.history.jsonl",
+        f"GeneratedAt: {run_at.isoformat()}",
+        "",
+        "RULES:",
+        "- ProfileDraft 用户确认区才是最高优先级事实；Agent 候选区只是弱信号。",
+        "- 新主线/文件夹用途/用户偏好/长期目标只能追加到 Agent 候选区，不能自动改用户确认区。",
+        "- 周复盘先读 review_digest.latest.json；证据不清时再查 changed_blocks.latest.json。",
+        "",
+        "活跃主线:",
+    ]
+    if mainlines:
+        for entry in mainlines[:20]:
+            label = extract_profile_entry_label(entry)
+            if label:
+                lines.append(f"- {label}")
+    else:
+        lines.append("- 暂无已确认主线")
+
+    lines += ["", "复盘偏好:"]
+    if prefs:
+        for entry in prefs[:10]:
+            label = extract_profile_entry_label(entry)
+            if label:
+                lines.append(f"- {label}")
+    else:
+        lines += [
+            "- 结论先行",
+            "- 按长期主线组织",
+            "- 避免逐条 block 罗列",
+        ]
+    atomic_write_text(path, "\n".join(lines) + "\n")
+    return path
+
+
 def build_profile_update_suggestions(
     digest_payload: dict[str, Any],
     confirmed_profile: dict[str, Any],
@@ -1638,10 +1745,51 @@ def build_profile_update_suggestions(
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": run_at.isoformat(),
-        "status": "suggested_only_not_merged",
-        "policy": "Do not automatically merge folder roles, long-term goals, or active mainlines. User confirmation is required.",
+        "status": "suggested_and_may_be_appended_to_profile_draft",
+        "policy": "Append candidates to Reviews/_AgentProfile/vault_profile.draft.md Agent 候选区. Do not modify 用户确认区 automatically.",
         "suggestions": suggestions[:20],
     }
+
+
+def append_profile_candidates_to_draft(
+    draft_path: Path,
+    suggestions_payload: dict[str, Any],
+    run_at: datetime,
+) -> int:
+    if not draft_path.exists() or not draft_path.is_file():
+        return 0
+    suggestions = suggestions_payload.get("suggestions", [])
+    if not isinstance(suggestions, list) or not suggestions:
+        return 0
+
+    text = draft_path.read_text(encoding="utf-8-sig", errors="replace")
+    new_lines: list[str] = []
+    for item in suggestions:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind", "candidate")).strip()
+        topic = str(item.get("topic") or item.get("path") or item.get("proposal") or "").strip()
+        if not topic or topic in text:
+            continue
+        sources = item.get("sources", [])
+        source_text = ""
+        if isinstance(sources, list) and sources:
+            source_text = "；来源：" + "、".join(str(s) for s in sources[:3])
+        if kind == "new_topic_candidate":
+            new_lines.append(f"- [ ] 新主线候选：`{topic}`（低置信，需要你按需修改/删除）{source_text}")
+        else:
+            new_lines.append(f"- [ ] {kind}：`{topic}`{source_text}")
+
+    if not new_lines:
+        return 0
+
+    if "## Agent 候选区" not in text:
+        text = text.rstrip() + "\n\n## Agent 候选区\n\n> 以下内容由 Agent 自动追加。你可以直接修改、删除，或移动到“用户确认区”。\n"
+
+    stamp = run_at.strftime("%Y-%m-%d %H:%M")
+    addition = "\n\n### 自动候选 " + stamp + "\n\n" + "\n".join(new_lines)
+    atomic_write_text(draft_path, text.rstrip() + addition + "\n")
+    return len(new_lines)
 
 
 def increment(target: dict[str, int], key: Any) -> None:
@@ -1789,7 +1937,7 @@ def report_outline() -> list[str]:
 def writing_guidelines(run_mode: str) -> list[str]:
     guidelines = [
         "以本周期新增/修改的文件为第一证据入口，必须覆盖这些文件；changed blocks 只用于定位文件内细节。",
-        "每个有变化的 confirmed profile 主题都要总结一条逻辑线：本周期哪些文件变化、它们共同说明什么进展、下一步是什么。",
+        "每个有变化的用户确认区主题都要总结一条逻辑线：本周期哪些文件变化、它们共同说明什么进展、下一步是什么。",
         "按主题串联工作脉络，不要按文件机械罗列。",
         "关键结论尽量引用 block.source_link。",
         "把未完成 checkbox、TODO、blocked、疑问和风险整理到阻塞或继承事项。",

@@ -112,6 +112,9 @@ memory/L4_raw_sessions/*
 !memory/obsidian_review_sop.md
 !memory/obsidian_profile_init_sop.md
 !memory/obsidian_periodic_review_sop.md
+!memory/obsidian_memory_management_sop.md
+!memory/obsidian_memory_templates/
+!memory/obsidian_memory_templates/**
 !memory/obsidian_review/
 !memory/obsidian_review/**
 
