@@ -210,10 +210,15 @@ def _prepare_review(user_request: str, display_queue=None) -> tuple[dict | None,
     return data, None
 
 
+
 def render_report_prompt(user_request: str, prepared: dict) -> str:
     vault = prepared.get("vault_path") or parse_request(user_request).get("vault", "")
+    review_id = prepared.get("review_id", "")
+    run_dir = prepared.get("run_dir", "")
     changed_blocks_file = prepared.get("changed_blocks_file", "")
     review_digest_file = prepared.get("review_digest_file", "")
+    state_update_file = prepared.get("review_state_update_file", "")
+    memory_proposals_file = prepared.get("memory_proposals_file", "")
     suggested_report = prepared.get("suggested_report", "")
     profile_update_file = prepared.get("vault_profile_update_file", "")
     profile_draft = prepared.get("profile_draft", "")
@@ -224,60 +229,47 @@ def render_report_prompt(user_request: str, prepared: dict) -> str:
     changed_files = prepared.get("changed_files", 0)
     changed_blocks = prepared.get("changed_blocks", 0)
     vault_arg = f' --vault "{vault}"' if vault else ""
+    review_arg = f' --review-id "{review_id}"' if review_id else ""
 
-    return f"""> Obsidian Review Skill -> GenericAgent 自己执行周期复盘
+    return f"""> Obsidian Review Skill -> GenericAgent 周期复盘
 
-用户原始请求：
-{user_request}
+用户原始请求：{user_request}
 
-GenericAgent 已经完成确定性准备步骤，prepare 输出如下：
+prepare 已经完成；不要重新运行 prepare。所有收尾文件必须属于同一个 review run。
 
 ```json
 {json.dumps(prepared, ensure_ascii=False, indent=2)}
 ```
 
-现在只剩写作和收尾，不要重新运行 prepare。
+本轮 review_id：`{review_id}`
+本轮 run_dir：`{run_dir}`
 
 必须按顺序执行：
 
 1. 读取 `{SOP_PATH}`，确认报告结构。
-2. 读取 `{review_digest_file}` 作为主要写作输入，其中包含从 `vault_profile.draft.md` 用户确认区解析出的 profile 上下文。
-3. 报告必须以 `review_digest.latest.json` 里的 `file_summaries` 为第一证据，覆盖本周期所有新增/修改文件；再按用户确认区的主题把这些文件串成逻辑线。
-4. 只有当 digest 的来源不够清楚时，才读取 `{changed_blocks_file}` 查证文件内细节；不要把 changed blocks 当作报告基点，也不要直接扫描整个 Vault。
-5. 按 SOP 的固定章节生成 Markdown 复盘报告，写入：
-   `{suggested_report}`
-6. 在 Vault 的 `.obsidian-review-agent/review_state_update.latest.json` 写入轻量状态更新，至少包含：
-   - `open_items`
-   - `blockers`
-   - `active_topics`
-7. prepare 已经把自动候选写入 `{profile_update_file}`；如有可展示的新增候选，也可能已经追加到：
-   `{profile_draft}`
-   本次自动追加候选数：{draft_candidates_added}
-   不要改写 profile draft 的“用户确认区”。
-8. 报告写成功后运行 finalize：
-   `python "{SCRIPT_PATH}" finalize{vault_arg} --report "{suggested_report}"`
-9. 最后只向用户汇报：
-   - 报告路径
-   - 本次周期和时间范围：{period}，{date_start} 到 {date_end}
-   - changed/new files 数量：{changed_files}
-   - changed blocks 数量：{changed_blocks}
-   - profile draft 是否追加候选：{draft_candidates_added}
-   - 是否 finalize 成功
+2. 读取 `{review_digest_file}` 作为主要写作输入；它是本轮 run-scoped digest。
+3. 只有证据不清时才读取 `{changed_blocks_file}` 查证细节；不要直接扫描整个 Vault。
+4. 生成 Markdown 复盘报告并写入：`{suggested_report}`
+5. 写入 run-scoped 状态文件 `{state_update_file}`，必须包含 `review_id: "{review_id}"`，并至少包含 `open_items`、`blockers`、`active_topics`。
+6. 写入 run-scoped memory proposals 文件 `{memory_proposals_file}`。没有候选时也要写空数组：`{{"schema_version": 1, "review_id": "{review_id}", "proposals": []}}`
+7. memory proposals 最多 5 条；每条最多 180 中文字符；只保存路径或 Obsidian link 作为 evidence，不保存原文。允许的 kind 只有 `mainline_progress`、`mainline_gap`、`mainline_next_step`、`new_mainline_candidate`、`workflow_preference_candidate`。
+8. prepare 已经把自动候选写入 `{profile_update_file}`；如有可展示的新增候选，也可能已追加到 `{profile_draft}`。本次自动追加候选数：{draft_candidates_added}。不要改写 profile draft 的用户确认区。
+9. 报告、状态文件、memory proposals 都写成功后运行 finalize：
+   `python "{SCRIPT_PATH}" finalize{vault_arg}{review_arg} --report "{suggested_report}"`
+10. 最后只向用户汇报 report path、review_id、period、changed/new files、changed blocks、profile draft candidates added、finalize 是否成功。
 
 硬约束：
-- 隐私过滤必须发生在 LLM 读内容前；写报告优先基于 `review_digest.latest.json`。
+- `latest` files 只用于兼容和人工查看，不能作为 finalize 的事实来源。
 - `vault_profile.draft.md` 用户确认区是文件夹用途、长期目标、活跃主线的最高优先级上下文。
-- `infer_topic_hint()` 相关内容只能当低置信候选，不得覆盖用户确认区。
-- `vault_profile_update.latest.json` 和 profile draft 的 Agent 候选区只表示建议，不是 confirmed facts。
-- `review_digest.latest.json` 是主要输入；其中 `file_summaries` 是主证据，`changed_blocks.latest.json` 只是细节查证文件。
+- `memory_proposals.json` 只表示 pending candidate，不是 confirmed memory。
+- 不要把报告全文或原文片段塞进 memory；memory 只保存少量结构化候选和证据指针。
+- 报告优先基于 `{review_digest_file}` 的 `file_summaries`；`{changed_blocks_file}` 只是细节查证文件。
 - 必须总结本周期所有新增/修改文件；每个有变化的用户主题都要形成一条逻辑线。
 - 禁止把报告写成 `[[来源]]: 原文片段` 列表；必须按主题写逻辑串联总结。
 - source_link 已经是 Obsidian 双链，原样使用，不要再套一层 `[[...]]`。
-- 禁止保留 `[整体总结]`、`[待填写]`、`[项目进展]` 之类占位符。
-- 不要在报告写成功前 finalize。
-- 报告要写回 Obsidian 的 `Reviews/`，不是只输出在对话里。
-- 关键结论优先使用 `file_summaries` 中的 `source_links`；必要时再用 changed block 的 `source_link` 查证细节。
-"""
+- 禁止保留 `[整体总结]`、`[待填内容]`、`[项目进展]` 之类占位符。
+- 不要在报告、状态文件、memory proposals 全部写成功前 finalize。
+- 报告要写回 Obsidian 的 `Reviews/`，不是只输出在对话里。"""
 
 
 def render_prompt(user_request: str, display_queue=None) -> Optional[str]:

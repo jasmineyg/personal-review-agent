@@ -71,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
 
     finalize_parser = subparsers.add_parser("finalize", help="Commit pending snapshot after report writeback.")
     add_config_args(finalize_parser)
+    finalize_parser.add_argument("--review-id", required=True, help="Review run id returned by prepare.")
     finalize_parser.add_argument("--report", required=True, help="Report Markdown path written into the vault.")
 
     args = parser.parse_args(argv)
@@ -232,6 +233,9 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
     tz = get_timezone(config.get("timezone", "Asia/Shanghai"))
     run_at = datetime.now(tz)
     period_info = resolve_period(args.period, args.from_date, config, run_at)
+    review_id = make_review_id(run_at, vault, period_info)
+    run_dir = review_run_dir(state_dir, review_id)
+    run_dir.mkdir(parents=True, exist_ok=False)
 
     confirmed_profile_path = state_dir / "vault_profile.confirmed.json"
     confirmed_profile = load_json(confirmed_profile_path, default=None)
@@ -250,6 +254,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
             "to establish the confirmed baseline from the current Vault."
         )
     current_snapshot, skipped = build_snapshot(vault, config, run_at)
+    current_snapshot["review_id"] = review_id
     previous_state = load_json(state_dir / "review_state.json", default={})
     profile_draft_path = vault / config.get("profile_draft_dir", "Reviews/_AgentProfile") / "vault_profile.draft.md"
     if profile_draft_path.exists() and profile_draft_path.is_file():
@@ -271,13 +276,21 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         changed_blocks = diff_snapshots(previous_snapshot, current_snapshot, period_info)
         run_mode = "block_diff"
 
-    suggested_report = allocate_report_path(vault, output_dir, period_info["period"], run_at)
+    suggested_report = allocate_report_path(vault, output_dir, period_info["period"], run_at, review_id)
+    changed_path = run_dir / "changed_blocks.json"
+    digest_path = run_dir / "review_digest.json"
+    pending_path = run_dir / "pending_snapshot.json"
+    state_update_path = run_dir / "review_state_update.json"
+    proposals_path = run_dir / "memory_proposals.json"
+    manifest_path = run_dir / "run_manifest.json"
     meta = {
         "schema_version": SCHEMA_VERSION,
+        "review_id": review_id,
         "source": "GenericAgent",
         "vault_path": str(vault),
         "config_path": str(config_path),
         "state_dir": rel_to_vault(state_dir, vault),
+        "run_dir": rel_to_vault(run_dir, vault),
         "period": period_info["period"],
         "date_start": period_info["date_start"],
         "date_end": period_info["date_end"],
@@ -298,7 +311,12 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "vault_profile_update_file": rel_to_vault(profile_update_path, vault),
         "suggested_report": rel_to_vault(suggested_report, vault),
         "suggested_report_path": str(suggested_report),
-        "pending_snapshot": rel_to_vault(state_dir / "pending_snapshot.latest.json", vault),
+        "pending_snapshot": rel_to_vault(pending_path, vault),
+        "changed_blocks_file": rel_to_vault(changed_path, vault),
+        "review_digest_file": rel_to_vault(digest_path, vault),
+        "review_state_update_file": rel_to_vault(state_update_path, vault),
+        "memory_proposals_file": rel_to_vault(proposals_path, vault),
+        "run_manifest_file": rel_to_vault(manifest_path, vault),
     }
 
     payload = {
@@ -312,19 +330,57 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
     }
     digest_payload = build_review_digest(payload)
     profile_update_payload = build_profile_update_suggestions(digest_payload, confirmed_profile, run_at)
-    changed_path = state_dir / "changed_blocks.latest.json"
-    digest_path = state_dir / "review_digest.latest.json"
-    pending_path = state_dir / "pending_snapshot.latest.json"
+    state_update_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "review_id": review_id,
+        "open_items": [],
+        "blockers": [],
+        "active_topics": [],
+    }
+    proposals_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "review_id": review_id,
+        "proposals": [],
+    }
+    manifest_payload = {
+        "schema_version": SCHEMA_VERSION,
+        "review_id": review_id,
+        "created_at": run_at.isoformat(),
+        "vault_path": str(vault),
+        "period": period_info["period"],
+        "date_start": period_info["date_start"],
+        "date_end": period_info["date_end"],
+        "run_mode": run_mode,
+        "suggested_report": str(suggested_report),
+        "suggested_report_rel": rel_to_vault(suggested_report, vault),
+        "changed_blocks_file": str(changed_path),
+        "review_digest_file": str(digest_path),
+        "pending_snapshot": str(pending_path),
+        "review_state_update_file": str(state_update_path),
+        "memory_proposals_file": str(proposals_path),
+    }
     atomic_write_json(changed_path, payload)
     atomic_write_json(digest_path, digest_payload)
     atomic_write_json(pending_path, current_snapshot)
+    atomic_write_json(state_update_path, state_update_payload)
+    atomic_write_json(proposals_path, proposals_payload)
+    atomic_write_json(manifest_path, manifest_payload)
+    atomic_write_json(state_dir / "changed_blocks.latest.json", payload)
+    atomic_write_json(state_dir / "review_digest.latest.json", digest_payload)
+    atomic_write_json(state_dir / "pending_snapshot.latest.json", current_snapshot)
+    atomic_write_json(state_dir / "review_state_update.latest.json", state_update_payload)
+    atomic_write_json(state_dir / "memory_proposals.latest.json", proposals_payload)
+    atomic_write_json(state_dir / "latest_run_manifest.json", manifest_payload)
     atomic_write_json(profile_update_path, profile_update_payload)
     draft_candidates_added = append_profile_candidates_to_draft(profile_draft_path, profile_update_payload, run_at)
 
     return {
         "ok": True,
         "action": "prepare",
+        "review_id": review_id,
         "vault_path": str(vault),
+        "run_dir": str(run_dir),
+        "run_manifest": str(manifest_path),
         "run_mode": run_mode,
         "period": period_info["period"],
         "date_start": period_info["date_start"],
@@ -334,24 +390,45 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "changed_blocks_file": str(changed_path),
         "review_digest_file": str(digest_path),
         "pending_snapshot": str(pending_path),
+        "review_state_update_file": str(state_update_path),
+        "memory_proposals_file": str(proposals_path),
         "confirmed_profile": str(confirmed_profile_path),
         "profile_draft": str(profile_draft_path) if profile_draft_path.exists() else "",
         "l1_context": str(l1_path),
         "vault_profile_update_file": str(profile_update_path),
         "profile_draft_candidates_added": draft_candidates_added,
         "suggested_report": str(suggested_report),
-        "next": "Generate the Markdown report from review_digest.latest.json using changed/new files as the primary evidence and changed_blocks.latest.json only for detail lookup, write review_state_update.latest.json, note any profile candidates appended to vault_profile.draft.md, then run finalize.",
+        "next": "Generate the Markdown report from this run's review_digest.json, write this run's review_state_update.json and memory_proposals.json, then run finalize with --review-id.",
     }
 
 
 def cmd_finalize(args: argparse.Namespace) -> dict[str, Any]:
     config, _config_path, vault = load_config_from_args(args)
     state_dir = vault / config["state_dir"]
-    pending_path = state_dir / "pending_snapshot.latest.json"
+    review_id = args.review_id
+    run_dir = review_run_dir(state_dir, review_id)
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise UserFacingError(f"Review run does not exist: {run_dir}")
+
+    marker_path = finalize_marker_path(run_dir)
+    if marker_path.exists():
+        marker = load_json(marker_path)
+        if isinstance(marker, dict):
+            marker["idempotent"] = True
+            return marker
+
+    manifest_path = run_dir / "run_manifest.json"
+    manifest = load_json(manifest_path)
+    if not isinstance(manifest, dict) or manifest.get("review_id") != review_id:
+        raise UserFacingError(f"Run manifest review_id mismatch: {manifest_path}")
+
+    pending_path = run_dir / "pending_snapshot.json"
     snapshot_path = state_dir / "review_snapshot.json"
-    changed_path = state_dir / "changed_blocks.latest.json"
+    changed_path = run_dir / "changed_blocks.json"
+    digest_path = run_dir / "review_digest.json"
     state_path = state_dir / "review_state.json"
-    update_path = state_dir / "review_state_update.latest.json"
+    update_path = run_dir / "review_state_update.json"
+    proposals_path = run_dir / "memory_proposals.json"
 
     report_path = Path(args.report).expanduser()
     if not report_path.is_absolute():
@@ -361,13 +438,49 @@ def cmd_finalize(args: argparse.Namespace) -> dict[str, Any]:
     if not report_path.exists() or not report_path.is_file():
         raise UserFacingError(f"Report file does not exist: {report_path}")
     ensure_inside_vault(report_path, vault, "report")
+    expected_report = Path(str(manifest.get("suggested_report", ""))).expanduser()
+    if not expected_report.is_absolute():
+        expected_report = (vault / expected_report).resolve()
+    else:
+        expected_report = expected_report.resolve()
+    if report_path != expected_report:
+        raise UserFacingError(
+            f"Report path does not match this review run. Expected {expected_report}, got {report_path}"
+        )
     if not pending_path.exists():
         raise UserFacingError(f"Missing pending snapshot. Run prepare first: {pending_path}")
 
     pending_snapshot = load_json(pending_path)
+    if not isinstance(pending_snapshot, dict) or pending_snapshot.get("review_id") != review_id:
+        raise UserFacingError(f"pending_snapshot.json review_id mismatch: {pending_path}")
     changed_payload = load_json(changed_path, default={})
     changed_meta = changed_payload.get("meta", {}) if isinstance(changed_payload, dict) else {}
-    atomic_write_json(snapshot_path, pending_snapshot)
+    if changed_meta.get("review_id") != review_id:
+        raise UserFacingError(f"changed_blocks.json review_id mismatch: {changed_path}")
+    digest_payload = load_json(digest_path)
+    digest_meta = digest_payload.get("meta", {}) if isinstance(digest_payload, dict) else {}
+    if digest_meta.get("review_id") != review_id:
+        raise UserFacingError(f"review_digest.json review_id mismatch: {digest_path}")
+    proposals_payload = load_json(proposals_path)
+    normalized_proposals = normalize_memory_proposals(proposals_payload, review_id)
+    atomic_write_json(
+        proposals_path,
+        {"schema_version": SCHEMA_VERSION, "review_id": review_id, "proposals": normalized_proposals},
+    )
+
+    memory_dir = state_dir / "memory"
+    pending_updates_path = memory_dir / "profile_updates.pending.jsonl"
+    review_history_path = memory_dir / "review_history.jsonl"
+    proposal_records = [
+        proposal_to_pending_record(proposal, review_id, report_path, digest_path, run_dir, vault)
+        for proposal in normalized_proposals
+    ]
+    appended_proposal_ids = append_jsonl_once(pending_updates_path, proposal_records, "proposal_id")
+    touched_mainlines = []
+    for proposal in normalized_proposals:
+        if append_mainline_candidate_once(memory_dir, proposal, review_id, report_path, digest_path, vault):
+            touched_mainlines.append(proposal.get("target_id", "uncategorized"))
+    touched_mainlines = unique_list(touched_mainlines)
 
     existing_state = load_json(state_path, default={})
     if not isinstance(existing_state, dict):
@@ -375,25 +488,257 @@ def cmd_finalize(args: argparse.Namespace) -> dict[str, Any]:
     state_update = load_json(update_path, default={})
     if not isinstance(state_update, dict):
         state_update = {}
+    if state_update.get("review_id") not in (None, "", review_id):
+        raise UserFacingError(f"review_state_update.json review_id mismatch: {update_path}")
     next_state = merge_review_state(existing_state, state_update)
     next_state["latest_report"] = rel_to_vault(report_path, vault)
     next_state["last_run"] = {
+        "review_id": review_id,
         "period": changed_meta.get("period"),
         "run_mode": changed_meta.get("run_mode"),
         "date_start": changed_meta.get("date_start"),
         "date_end": changed_meta.get("date_end"),
         "changed_blocks": changed_meta.get("changed_blocks_count", 0),
     }
+    history_record = {
+        "id": review_id,
+        "schema_version": SCHEMA_VERSION,
+        "review_id": review_id,
+        "period": changed_meta.get("period"),
+        "date_start": changed_meta.get("date_start"),
+        "date_end": changed_meta.get("date_end"),
+        "report_path": rel_to_vault(report_path, vault),
+        "digest_path": rel_to_vault(digest_path, vault),
+        "changed_files": changed_meta.get("changed_files_count", 0),
+        "changed_blocks": changed_meta.get("changed_blocks_count", 0),
+        "mainlines_touched": touched_mainlines,
+        "created_pending_updates": [record["proposal_id"] for record in proposal_records],
+        "finalized_at": datetime.now(get_timezone(config.get("timezone", "Asia/Shanghai"))).isoformat(),
+    }
+    appended_review_ids = append_jsonl_once(review_history_path, [history_record], "review_id")
+
+    atomic_write_json(snapshot_path, pending_snapshot)
     atomic_write_json(state_path, next_state)
 
-    return {
+    marker = {
         "ok": True,
         "action": "finalize",
+        "review_id": review_id,
         "report": str(report_path),
         "snapshot": str(snapshot_path),
         "state": str(state_path),
         "latest_report": next_state["latest_report"],
+        "proposal_count": len(normalized_proposals),
+        "appended_proposal_ids": appended_proposal_ids,
+        "review_history_appended": bool(appended_review_ids),
+        "mainlines_touched": touched_mainlines,
     }
+    atomic_write_json(marker_path, marker)
+    return marker
+
+
+def make_review_id(run_at: datetime, vault: Path, period_info: dict[str, str]) -> str:
+    base = "|".join(
+        [
+            str(vault.resolve()),
+            period_info.get("period", ""),
+            period_info.get("date_start", ""),
+            period_info.get("date_end", ""),
+            run_at.isoformat(),
+        ]
+    )
+    suffix = hashlib.sha256(base.encode("utf-8")).hexdigest()[:8]
+    return f"review_{run_at.strftime('%Y%m%d_%H%M%S')}_{suffix}"
+
+
+def review_run_dir(state_dir: Path, review_id: str) -> Path:
+    if not re.fullmatch(r"review_\d{8}_\d{6}_[0-9a-f]{8}", str(review_id or "")):
+        raise UserFacingError(f"Invalid review_id: {review_id}")
+    return state_dir / "runs" / review_id
+
+
+def finalize_marker_path(run_dir: Path) -> Path:
+    return run_dir / "finalize_marker.json"
+
+
+ALLOWED_PROPOSAL_KINDS = {
+    "mainline_progress",
+    "mainline_gap",
+    "mainline_next_step",
+    "new_mainline_candidate",
+    "workflow_preference_candidate",
+}
+
+
+def normalize_memory_proposals(payload: Any, review_id: str) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise UserFacingError("memory_proposals.json must be a JSON object.")
+    if payload.get("review_id") != review_id:
+        raise UserFacingError("memory_proposals.json review_id mismatch.")
+    proposals = payload.get("proposals", [])
+    if not isinstance(proposals, list):
+        raise UserFacingError("memory_proposals.json proposals must be a list.")
+    if len(proposals) > 5:
+        raise UserFacingError("memory_proposals.json may contain at most 5 proposals.")
+
+    normalized = []
+    for index, raw in enumerate(proposals, start=1):
+        if not isinstance(raw, dict):
+            raise UserFacingError(f"Proposal #{index} must be a JSON object.")
+        kind = str(raw.get("kind", "")).strip()
+        if kind not in ALLOWED_PROPOSAL_KINDS:
+            raise UserFacingError(f"Unsupported proposal kind: {kind}")
+        target_id = str(raw.get("target_id") or "uncategorized").strip() or "uncategorized"
+        proposal_text = str(raw.get("proposal", "")).strip()
+        if not proposal_text:
+            raise UserFacingError(f"Proposal #{index} is missing proposal text.")
+        if len(proposal_text) > 180:
+            raise UserFacingError(f"Proposal #{index} exceeds 180 characters.")
+        evidence = normalize_proposal_evidence(raw.get("evidence", []), index)
+        expected_id = proposal_key(review_id, kind, target_id, proposal_text)
+        provided_id = str(raw.get("proposal_id", "")).strip()
+        if provided_id and provided_id != expected_id:
+            raise UserFacingError(f"Proposal #{index} proposal_id mismatch. Expected {expected_id}.")
+        normalized.append(
+            {
+                "proposal_id": expected_id,
+                "kind": kind,
+                "target_id": target_id,
+                "proposal": proposal_text,
+                "confidence": "agent_candidate",
+                "evidence": evidence,
+            }
+        )
+    payload["proposals"] = normalized
+    return normalized
+
+
+def normalize_proposal_evidence(value: Any, proposal_index: int) -> list[dict[str, str]]:
+    if value in (None, ""):
+        return []
+    if not isinstance(value, list):
+        raise UserFacingError(f"Proposal #{proposal_index} evidence must be a list.")
+    result: list[dict[str, str]] = []
+    for item in value[:8]:
+        if not isinstance(item, dict):
+            raise UserFacingError(f"Proposal #{proposal_index} evidence entries must be objects.")
+        entry_type = str(item.get("type") or "source").strip()[:40]
+        path = str(item.get("path") or item.get("link") or "").strip()
+        if not path:
+            continue
+        result.append({"type": entry_type, "path": path[:240]})
+    return result
+
+
+def proposal_key(review_id: str, kind: str, target_id: str, proposal: str) -> str:
+    raw = "|".join([review_id, kind, target_id, proposal])
+    return "prop_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def proposal_to_pending_record(
+    proposal: dict[str, Any],
+    review_id: str,
+    report_path: Path,
+    digest_path: Path,
+    run_dir: Path,
+    vault: Path,
+) -> dict[str, Any]:
+    evidence = list(proposal.get("evidence", []))
+    evidence.extend(
+        [
+            {"type": "review_report", "path": rel_to_vault(report_path, vault)},
+            {"type": "review_digest", "path": rel_to_vault(digest_path, vault)},
+        ]
+    )
+    return {
+        "id": proposal["proposal_id"],
+        "proposal_id": proposal["proposal_id"],
+        "schema_version": SCHEMA_VERSION,
+        "review_id": review_id,
+        "status": "pending",
+        "kind": proposal["kind"],
+        "target_layer": "L3",
+        "target_id": proposal.get("target_id", "uncategorized"),
+        "proposal": proposal["proposal"],
+        "confidence": "agent_candidate",
+        "evidence": evidence,
+        "run_dir": rel_to_vault(run_dir, vault),
+        "created_at": datetime.now().isoformat(),
+    }
+
+
+def append_jsonl_once(path: Path, records: list[dict[str, Any]], key: str) -> list[str]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = read_jsonl_keys(path, key)
+    additions = []
+    added_keys = []
+    for record in records:
+        value = str(record.get(key, "")).strip()
+        if not value or value in existing:
+            continue
+        additions.append(json.dumps(record, ensure_ascii=False, sort_keys=True))
+        added_keys.append(value)
+        existing.add(value)
+    if additions:
+        with path.open("a", encoding="utf-8") as handle:
+            for line in additions:
+                handle.write(line + "\n")
+    return added_keys
+
+
+def read_jsonl_keys(path: Path, key: str) -> set[str]:
+    if not path.exists():
+        return set()
+    result: set[str] = set()
+    for lineno, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise UserFacingError(f"Invalid JSONL in {path} at line {lineno}: {exc}") from exc
+        value = str(item.get(key, "")).strip()
+        if value:
+            result.add(value)
+    return result
+
+
+def append_mainline_candidate_once(
+    memory_dir: Path,
+    proposal: dict[str, Any],
+    review_id: str,
+    report_path: Path,
+    digest_path: Path,
+    vault: Path,
+) -> bool:
+    target_id = str(proposal.get("target_id") or "uncategorized").strip() or "uncategorized"
+    mainline_id = safe_mainline_id(target_id)
+    mainline_dir = memory_dir / "mainlines"
+    mainline_path = mainline_dir / f"{mainline_id}.md"
+    existing = mainline_path.read_text(encoding="utf-8-sig", errors="replace") if mainline_path.exists() else ""
+    proposal_id = proposal["proposal_id"]
+    if proposal_id in existing:
+        return False
+    if not existing:
+        existing = f"# {target_id}\n\n## Agent 候选更新\n"
+    elif "## Agent 候选更新" not in existing:
+        existing = existing.rstrip() + "\n\n## Agent 候选更新\n"
+    addition = (
+        f"\n- `{proposal_id}` [{proposal['kind']}] {proposal['proposal']}\n"
+        f"  - review_id: `{review_id}`\n"
+        f"  - report: {rel_to_vault(report_path, vault)}\n"
+        f"  - digest: {rel_to_vault(digest_path, vault)}\n"
+    )
+    atomic_write_text(mainline_path, existing.rstrip() + "\n" + addition)
+    return True
+
+
+def safe_mainline_id(value: str) -> str:
+    raw = str(value or "uncategorized").strip()
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_").lower()
+    if slug:
+        return slug[:80]
+    return "mainline_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
 
 
 def ensure_state_files(state_dir: Path) -> None:
@@ -1370,9 +1715,10 @@ def strip_internal_fields(block: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def allocate_report_path(vault: Path, output_dir: Path, period: str, run_at: datetime) -> Path:
+def allocate_report_path(vault: Path, output_dir: Path, period: str, run_at: datetime, review_id: str = "") -> Path:
     date_part = run_at.date().isoformat()
-    stem = f"{date_part}_{period}_周期复盘"
+    id_part = review_id.rsplit("_", 1)[-1] if review_id else ""
+    stem = f"{date_part}_{period}_{id_part}_review" if id_part else f"{date_part}_{period}_review"
     candidate = output_dir / f"{stem}.md"
     index = 2
     while candidate.exists():
