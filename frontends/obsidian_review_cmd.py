@@ -43,13 +43,13 @@ PERIOD_ALIASES = {
 
 def _help_text() -> str:
     return (
-        "**/obsidian-review 用法**\n\n"
+        "**/obsidian-review \u7528\u6cd5**\n\n"
         "`/obsidian-review init-profile --vault D:\\download\\Obsidian\\Jasmine`\n"
         "`/obsidian-review confirm-profile --vault D:\\download\\Obsidian\\Jasmine`\n"
         "`/obsidian-review this-week --vault D:\\download\\Obsidian\\Jasmine`\n"
         "`/obsidian-review --from 2026-06-01 --vault D:\\download\\Obsidian\\Jasmine`\n\n"
-        "首次进入 Vault 必须先 init-profile，用户在 Obsidian 中维护 "
-        "`Reviews/_AgentProfile/vault_profile.draft.md` 的用户确认区；首次建模后运行一次 confirm-profile 建立 baseline。"
+        "\u9996\u6b21\u8fdb\u5165 Vault \u5148\u8fd0\u884c init-profile\uff0c\u6253\u5f00\u751f\u6210\u7684 `Reviews/_AgentProfile/vault_profile.draft.md`\uff0c"
+        "\u6309\u4f60\u7684\u771f\u5b9e\u7406\u89e3\u4fee\u6539\u201c\u6211\u7684\u590d\u76d8\u8bb0\u5fc6\u201d\uff1b\u9996\u6b21\u6574\u7406\u5b8c\u6210\u540e\u8fd0\u884c\u4e00\u6b21 confirm-profile \u5efa\u7acb baseline\u3002"
     )
 
 
@@ -154,7 +154,7 @@ def _profile_command(user_request: str, display_queue=None) -> Optional[str]:
     if vault:
         args += ["--vault", vault]
     if display_queue:
-        action = "生成环境模型草案" if command == "init-profile" else "确认环境模型并建立初始 snapshot"
+        action = "\u751f\u6210\u590d\u76d8\u8bb0\u5fc6" if command == "init-profile" else "\u786e\u8ba4\u590d\u76d8\u8bb0\u5fc6\u5e76\u5efa\u7acb\u521d\u59cb snapshot"
         display_queue.put({"next": f"[obsidian-review] 正在{action}...\n", "source": "system"})
     ok, data, log = _run_helper(args)
     if not ok:
@@ -162,11 +162,11 @@ def _profile_command(user_request: str, display_queue=None) -> Optional[str]:
 
     if command == "init-profile":
         message = (
-            "Obsidian 环境模型草案已生成。\n\n"
-            f"- 草案路径：{data.get('profile_draft')}\n"
-            f"- 扫描 Markdown 文件数：{data.get('markdown_files')}\n"
-            "- 下一步：在 Obsidian 中直接维护 `Reviews/_AgentProfile/vault_profile.draft.md` 的“用户确认区”，"
-            "首次建模完成后运行一次 `/obsidian-review confirm-profile --vault <path>` 建立初始 snapshot。"
+            "Obsidian \u590d\u76d8\u8bb0\u5fc6\u5df2\u751f\u6210\u3002\n\n"
+            f"- \u6587\u4ef6\u8def\u5f84\uff1a{data.get('profile_draft')}\n"
+            f"- \u626b\u63cf Markdown \u6587\u4ef6\u6570\uff1a{data.get('markdown_files')}\n"
+            "- \u4e0b\u4e00\u6b65\uff1a\u5728 Obsidian \u4e2d\u6253\u5f00\u8fd9\u4efd\u201c\u6211\u7684\u590d\u76d8\u8bb0\u5fc6\u201d\uff0c\u6309\u4f60\u7684\u771f\u5b9e\u7406\u89e3\u4fee\u6539\u6587\u4ef6\u5939\u7528\u9014\u548c\u957f\u671f\u4e3b\u7ebf\uff1b"
+            "\u9996\u6b21\u6574\u7406\u5b8c\u6210\u540e\u8fd0\u884c\u4e00\u6b21 `/obsidian-review confirm-profile --vault <path>` \u5efa\u7acb\u521d\u59cb snapshot\u3002"
         )
     else:
         message = (

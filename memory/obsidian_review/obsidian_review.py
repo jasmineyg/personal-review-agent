@@ -217,7 +217,7 @@ def cmd_profile_confirm(args: argparse.Namespace) -> dict[str, Any]:
         "snapshot": str(snapshot_path),
         "markdown_files": summary["overview"]["markdown_files"],
         "skipped": skipped,
-        "next": "Initial profile baseline saved. Future periodic /obsidian-review runs will re-read vault_profile.draft.md and refresh runtime memory automatically.",
+        "next": "Initial profile baseline saved. Future periodic /obsidian-review runs will re-read \u6211\u7684\u590d\u76d8\u8bb0\u5fc6 and refresh runtime memory automatically.",
     }
 
 
@@ -758,7 +758,7 @@ def append_mainline_candidate_once(
 
 
 DRAFT_PROPOSAL_ID_RE = re.compile(r"`?(prop_[0-9a-f]{16})`?")
-DRAFT_STATUS_RE = re.compile("(?:status|\u72b6\u6001)\s*[:\uff1a]\s*`?([^`|,;\s]+)`?", re.IGNORECASE)
+DRAFT_STATUS_RE = re.compile("(?:status|\u72b6\u6001|\u5904\u7406)\s*[:\uff1a]\s*`?([^`|,;\s]+)`?", re.IGNORECASE)
 
 
 def empty_draft_memory_sync() -> dict[str, Any]:
@@ -871,14 +871,18 @@ def parse_draft_candidate_block(proposal_id: str, block: list[str]) -> dict[str,
     block_text = "\n".join(block)
     first_line = block[0] if block else ""
     status = parse_draft_candidate_status(block_text, first_line)
-    proposal = parse_draft_field(block, ("\u5185\u5bb9", "proposal", "text")) or fallback_draft_proposal_text(first_line)
-    kind = parse_draft_field(block, ("kind", "\u7c7b\u578b")) or parse_inline_meta(first_line, "kind") or "draft_candidate"
+    proposal = parse_draft_field(block, ("\u5efa\u8bae\u5185\u5bb9", "\u5185\u5bb9", "proposal", "text")) or fallback_draft_proposal_text(first_line)
+    kind = (
+        parse_draft_field(block, ("\u5efa\u8bae\u7c7b\u578b", "kind", "\u7c7b\u578b"))
+        or parse_inline_meta(first_line, "kind")
+        or "draft_candidate"
+    )
     target_id = (
-        parse_draft_field(block, ("target", "target_id", "\u4e3b\u7ebf"))
+        parse_draft_field(block, ("\u76f8\u5173\u5bf9\u8c61", "\u76f8\u5173\u4e3b\u7ebf", "target", "target_id", "\u4e3b\u7ebf"))
         or parse_inline_meta(first_line, "target")
         or "uncategorized"
     )
-    review_id = parse_draft_field(block, ("review_id", "review")) or parse_inline_meta(first_line, "review_id")
+    review_id = parse_draft_field(block, ("\u590d\u76d8\u7f16\u53f7", "review_id", "review")) or parse_inline_meta(first_line, "review_id")
     return {
         "proposal_id": proposal_id,
         "status": status,
@@ -887,7 +891,6 @@ def parse_draft_candidate_block(proposal_id: str, block: list[str]) -> dict[str,
         "proposal": clean_draft_value(proposal),
         "review_id": clean_draft_value(review_id),
     }
-
 
 def parse_draft_candidate_status(block_text: str, first_line: str) -> str:
     match = DRAFT_STATUS_RE.search(block_text or "")
@@ -904,9 +907,9 @@ def parse_draft_candidate_status(block_text: str, first_line: str) -> str:
 
 def normalize_draft_status(value: str) -> str:
     lowered = str(value or "").strip().strip("`[](){}.,;:").lower()
-    confirmed = {"confirmed", "confirm", "approved", "approve", "accepted", "accept", "done", "yes", "y", "\u786e\u8ba4", "\u5df2\u786e\u8ba4", "\u901a\u8fc7", "\u63a5\u53d7"}
-    rejected = {"rejected", "reject", "declined", "decline", "refused", "refuse", "no", "n", "\u62d2\u7edd", "\u5df2\u62d2\u7edd", "\u4e22\u5f03", "\u653e\u5f03"}
-    pending = {"pending", "todo", "open", "wait", "waiting", "\u5f85\u5904\u7406", "\u672a\u5904\u7406", "\u4fdd\u7559"}
+    confirmed = {"confirmed", "confirm", "approved", "approve", "accepted", "accept", "done", "yes", "y", "\u786e\u8ba4", "\u5df2\u786e\u8ba4", "\u901a\u8fc7", "\u63a5\u53d7", "\u5bf9", "\u662f"}
+    rejected = {"rejected", "reject", "declined", "decline", "refused", "refuse", "no", "n", "\u62d2\u7edd", "\u5df2\u62d2\u7edd", "\u4e22\u5f03", "\u653e\u5f03", "\u4e0d\u5bf9", "\u5426"}
+    pending = {"pending", "todo", "open", "wait", "waiting", "\u5f85\u5b9a", "\u5f85\u5904\u7406", "\u672a\u5904\u7406", "\u4fdd\u7559", "\u5148\u7559\u7740"}
     if lowered in confirmed:
         return "confirmed"
     if lowered in rejected:
@@ -914,7 +917,6 @@ def normalize_draft_status(value: str) -> str:
     if lowered in pending:
         return "pending"
     return ""
-
 
 def parse_draft_field(block: list[str], labels: tuple[str, ...]) -> str:
     label_pattern = "|".join(re.escape(label) for label in labels)
@@ -934,12 +936,11 @@ def parse_inline_meta(line: str, key: str) -> str:
 def fallback_draft_proposal_text(line: str) -> str:
     text = re.sub(r"^\s*[-*+]\s+\[[ xX]\]\s*", "", line or "").strip()
     text = DRAFT_PROPOSAL_ID_RE.sub("", text)
-    text = re.sub(r"proposal_id\s*[:\uff1a]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:proposal_id|\u5efa\u8bae\u7f16\u53f7)\s*[:\uff1a]\s*", "", text, flags=re.IGNORECASE)
     parts = [part.strip() for part in text.split("|")]
-    meta_keys = r"status|\u72b6\u6001|kind|\u7c7b\u578b|target|target_id|review_id"
+    meta_keys = r"status|\u72b6\u6001|\u5904\u7406|kind|\u7c7b\u578b|\u5efa\u8bae\u7c7b\u578b|target|target_id|\u76f8\u5173\u5bf9\u8c61|\u76f8\u5173\u4e3b\u7ebf|review_id|\u590d\u76d8\u7f16\u53f7"
     kept = [part for part in parts if not re.match(rf"^(?:{meta_keys})\s*[:\uff1a]", part, flags=re.IGNORECASE)]
     return " | ".join(kept).strip()
-
 
 def clean_draft_value(value: Any) -> str:
     text = str(value or "").strip()
@@ -1107,13 +1108,12 @@ def append_memory_proposals_to_draft(draft_path: Path, records: list[dict[str, A
         existing_ids.add(proposal_id)
     if not new_blocks:
         return 0
-    if "## Agent " + "\u5019\u9009\u533a" not in text:
-        text = text.rstrip() + "\n\n## Agent " + "\u5019\u9009\u533a" + "\n\n> Agent appends candidates only. Set status to confirmed/rejected; keep pending to defer. Deleting is not rejection.\n"
+    if "## \u5f85\u786e\u8ba4\u7684\u65b0\u53d1\u73b0" not in text and "## Agent " + "\u5019\u9009\u533a" not in text:
+        text = text.rstrip() + "\n\n## \u5f85\u786e\u8ba4\u7684\u65b0\u53d1\u73b0\n\n\u8fd9\u91cc\u4f1a\u51fa\u73b0\u590d\u76d8\u52a9\u624b\u6839\u636e\u65b0\u7b14\u8bb0\u53d1\u73b0\u7684\u53ef\u80fd\u8bb0\u5fc6\u3002\u4f60\u53ef\u4ee5\u628a\u201c\u72b6\u6001\u201d\u6539\u6210\u201c\u786e\u8ba4\u201d\u3001\u201c\u62d2\u7edd\u201d\u6216\u201c\u5f85\u5b9a\u201d\uff1b\u786e\u8ba4\u524d\u53ef\u4ee5\u76f4\u63a5\u6539\u201c\u5efa\u8bae\u5185\u5bb9\u201d\u3002\u5220\u9664\u4e0d\u4f1a\u88ab\u5f53\u6210\u62d2\u7edd\u3002\n"
     stamp = run_at.strftime("%Y-%m-%d %H:%M")
-    addition = "\n\n### Auto candidates " + stamp + "\n\n" + "\n".join(new_blocks)
+    addition = "\n\n### \u65b0\u5efa\u8bae " + stamp + "\n\n" + "\n".join(new_blocks)
     atomic_write_text(draft_path, text.rstrip() + addition + "\n")
     return len(new_blocks)
-
 
 def format_draft_candidate_record(record: dict[str, Any]) -> str:
     proposal_id = str(record.get("proposal_id") or record.get("id") or "").strip()
@@ -1129,15 +1129,31 @@ def format_draft_candidate_record(record: dict[str, Any]) -> str:
                 sources.append(str(item.get("path")))
     source_text = "; ".join(sources)
     lines = [
-        f"- [ ] proposal_id: `{proposal_id}` | status: pending | kind: `{kind}` | target: `{target_id}`",
-        f"  - proposal: {proposal}",
+        f"- \u5efa\u8bae\u7f16\u53f7\uff1a`{proposal_id}`",
+        "  - \u72b6\u6001\uff1a\u5f85\u5b9a",
+        f"  - \u5efa\u8bae\u7c7b\u578b\uff1a{format_candidate_kind_label(kind)}",
+        f"  - \u5efa\u8bae\u5185\u5bb9\uff1a{proposal}",
     ]
-    if review_id:
-        lines.append(f"  - review_id: `{review_id}`")
+    if target_id and target_id != "uncategorized":
+        lines.append(f"  - \u76f8\u5173\u5bf9\u8c61\uff1a`{target_id}`")
     if source_text:
-        lines.append(f"  - sources: {source_text}")
+        lines.append(f"  - \u6765\u6e90\uff1a{source_text}")
+    if review_id:
+        lines.append(f"  - \u590d\u76d8\u7f16\u53f7\uff1a`{review_id}`")
     return "\n".join(lines)
 
+
+def format_candidate_kind_label(kind: str) -> str:
+    labels = {
+        "mainline_progress": "\u4e3b\u7ebf\u8fdb\u5c55",
+        "mainline_gap": "\u4e3b\u7ebf\u7a7a\u7f3a",
+        "mainline_next_step": "\u4e0b\u4e00\u6b65\u7ebf\u7d22",
+        "new_mainline_candidate": "\u65b0\u4e3b\u7ebf",
+        "workflow_preference_candidate": "\u590d\u76d8\u504f\u597d",
+        "candidate": "\u5f85\u786e\u8ba4\u5efa\u8bae",
+        "draft_candidate": "\u5f85\u786e\u8ba4\u5efa\u8bae",
+    }
+    return labels.get(str(kind or "").strip(), str(kind or "\u5f85\u786e\u8ba4\u5efa\u8bae"))
 
 def read_jsonl_records(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
@@ -1652,88 +1668,221 @@ def infer_folder_role_candidate(folder_summary: dict[str, Any]) -> str:
     return "\u7528\u9014\u4e0d\u660e\u786e\uff0c\u9700\u8981\u7528\u6237\u8865\u5145\u8bf4\u660e"
 
 
-def format_profile_table_cell(value: Any) -> str:
-    text = truncate_text(str(value or "").replace("\n", " ").strip(), 320)
+def format_profile_table_cell(value: Any, limit: int = 180) -> str:
+    text = truncate_text(str(value or "").replace("\n", " ").strip(), limit)
     text = text.replace("|", "\\|")
-    return text or "\u6682\u65e0\u660e\u786e\u7ebf\u7d22"
+    return text or "\u5f85\u8865\u5145"
 
+
+def folder_display_role(folder_summary: dict[str, Any]) -> str:
+    base = concise_role_base(folder_summary)
+    focus = concise_folder_focus(folder_summary)
+    if focus and focus not in base:
+        return truncate_text(f"{base}\uff1a{focus}", 150)
+    return truncate_text(base, 150)
+
+
+def concise_role_base(folder_summary: dict[str, Any]) -> str:
+    path = str(folder_summary.get("path", ""))
+    normalized = path.replace("\\", "/")
+    lowered = normalized.lower()
+    activities = folder_summary.get("activity_counts", {}) or {}
+    if "clippings" in lowered or "\u526a\u85cf" in path:
+        return "\u7f51\u9875\u526a\u85cf\u4e0e\u5f85\u8bfb\u8d44\u6599\u6c60"
+    if "\u65e5\u8bb0" in path or "diary" in lowered or "journal" in lowered:
+        return "\u65e5\u8bb0\u4e0e\u9636\u6bb5\u6027\u8bb0\u5f55"
+    if "interview" in lowered or "\u9762\u8bd5" in path:
+        return "\u9762\u8bd5\u51c6\u5907\u4e0e\u590d\u76d8"
+    if normalized == "2-AI-Agent":
+        return "Agent \u5b66\u4e60\u3001\u8bba\u6587\u4e0e\u9762\u8bd5\u6750\u6599"
+    if normalized.startswith("2-AI-Agent/2-Paper"):
+        return "Agent \u8bba\u6587\u9605\u8bfb"
+    if normalized.startswith("2-AI-Agent/knowledge"):
+        return "Agent \u5de5\u7a0b\u77e5\u8bc6\u4e0e\u5de5\u5177\u6574\u7406"
+    if normalized == "3-RAG":
+        return "RAG \u8bba\u6587\u4e0e\u9879\u76ee\u6750\u6599"
+    if normalized.startswith("3-RAG/Paper"):
+        return "RAG \u8bba\u6587\u9605\u8bfb"
+    if normalized == "4-LLM":
+        return "LLM \u57fa\u7840\u4e0e\u8bba\u6587\u9605\u8bfb"
+    if normalized.startswith("4-LLM/Paper"):
+        return "LLM \u8bba\u6587\u9605\u8bfb"
+    if "MISGL" in normalized or "misgl" in lowered:
+        return "MISGL/\u56fe\u5b66\u4e60\u5b9e\u9a8c\u4e0e\u65b9\u6cd5\u5206\u6790"
+    if normalized == "1-Project":
+        return "\u9879\u76ee\u65b9\u6848\u3001\u8bbe\u8ba1\u4e0e\u8fdb\u5c55"
+    if normalized.startswith("1-Project/1-personal-review-agent"):
+        return "Personal Review Agent \u9879\u76ee\u8bbe\u8ba1\u4e0e\u8fed\u4ee3"
+    if normalized.startswith("1-Project/2-Paper-RAG"):
+        return "RAG \u9879\u76ee\u8bba\u6587\u4e0e\u65b9\u6848\u6750\u6599"
+    if "project" in lowered or "\u9879\u76ee" in path or activities.get("project_planning", 0) >= 3:
+        return "\u9879\u76ee\u65b9\u6848\u3001\u8bbe\u8ba1\u4e0e\u8fdb\u5c55"
+    if "paper" in lowered or "\u8bba\u6587" in path or activities.get("paper_reading", 0) >= 3:
+        return "\u8bba\u6587\u4e0e\u8d44\u6599\u9605\u8bfb"
+    if activities.get("experiment_log", 0) >= 3:
+        return "\u5b9e\u9a8c\u8bb0\u5f55\u4e0e\u7ed3\u679c\u5206\u6790"
+    if activities.get("daily_log", 0) >= 3:
+        return "\u65e5\u5e38\u8bb0\u5f55\u4e0e\u5468\u671f\u590d\u76d8"
+    return "\u7efc\u5408\u7b14\u8bb0\u4e0e\u5b66\u4e60\u6574\u7406"
+
+
+def concise_folder_focus(folder_summary: dict[str, Any]) -> str:
+    corpus = folder_text_corpus(folder_summary).lower()
+    labels = []
+    if "personal-review-agent" in corpus or "review agent" in corpus:
+        labels.append("Personal Review Agent")
+    if any(k in corpus for k in ("agent", "multi-agent", "\u667a\u80fd\u4f53")):
+        labels.append("Agent")
+    if any(k in corpus for k in ("rag", "retrieval", "\u68c0\u7d22", "\u77e5\u8bc6\u5e93")):
+        labels.append("RAG")
+    if any(k in corpus for k in ("llm", "transformer", "\u5927\u6a21\u578b")):
+        labels.append("LLM")
+    if any(k in corpus for k in ("misgl", "gnn", "\u56fe\u795e\u7ecf")):
+        labels.append("\u56fe\u5b66\u4e60/MISGL")
+    deduped = []
+    for label in labels:
+        if label not in deduped:
+            deduped.append(label)
+    if deduped:
+        return " / ".join(deduped[:3])
+    notes = note_name_samples(folder_summary, 2)
+    return "\u3001".join(notes[:2])
+
+
+def mainline_description_for_folder(folder_summary: dict[str, Any], cluster: str | None = None) -> str:
+    path = str(folder_summary.get("path") or "").strip()
+    focus = concise_folder_focus(folder_summary)
+    base = concise_role_base(folder_summary)
+    source = f"\u6765\u6e90\uff1a`{path}`" if path else "\u6765\u6e90\uff1a\u521d\u59cb\u626b\u63cf"
+    cluster = cluster or mainline_cluster_for_folder(folder_summary, infer_mainline_name_for_folder(folder_summary))
+    special = {
+        "graph_learning": "\u56f4\u7ed5 MISGL/\u56fe\u5b66\u4e60\u5b9e\u9a8c\u3001\u65b9\u6cd5\u5206\u6790\u548c\u7ed3\u679c\u8bb0\u5f55\uff1b\u4e0e Agent/RAG \u4e3b\u7ebf\u5206\u5f00\u8ddf\u8e2a\u3002",
+        "interview_preparation": "\u56f4\u7ed5\u9762\u8bd5\u51c6\u5907\u3001\u9898\u76ee\u6574\u7406\u3001\u8868\u8fbe\u6253\u78e8\u548c\u9636\u6bb5\u6027\u590d\u76d8\u3002",
+        "personal_review_agent_project": "\u56f4\u7ed5 Personal Review Agent \u7684\u9879\u76ee\u8bbe\u8ba1\u3001\u8bb0\u5fc6\u673a\u5236\u548c\u8fed\u4ee3\u63a8\u8fdb\u3002",
+        "rag_project_learning": "\u56f4\u7ed5 RAG \u9879\u76ee\u65b9\u6848\u3001\u8bba\u6587\u9605\u8bfb\u548c\u68c0\u7d22\u589e\u5f3a\u76f8\u5173\u6750\u6599\u3002",
+        "agent_paper_learning": "\u56f4\u7ed5 Agent/Multi-Agent \u8bba\u6587\u9605\u8bfb\u3001\u673a\u5236\u7406\u89e3\u548c\u65b9\u6cd5\u6574\u7406\u3002",
+        "agent_engineering": "\u56f4\u7ed5 Agent \u5de5\u7a0b\u77e5\u8bc6\u3001\u5de5\u5177\u94fe\u3001\u6846\u67b6\u8d44\u6599\u548c\u5b9e\u8df5\u6574\u7406\u3002",
+        "llm_learning": "\u56f4\u7ed5 LLM \u57fa\u7840\u3001\u8bba\u6587\u9605\u8bfb\u548c\u6a21\u578b\u673a\u5236\u5b66\u4e60\u3002",
+        "project_planning": "\u56f4\u7ed5\u9879\u76ee\u65b9\u6848\u3001\u8bbe\u8ba1\u51b3\u7b56\u3001\u63a8\u8fdb\u8bb0\u5f55\u548c\u9636\u6bb5\u6210\u679c\u3002",
+    }.get(cluster)
+    if special:
+        return truncate_text(f"{source}\uff1b{special}", 180)
+    if focus:
+        return truncate_text(f"{source}\uff1b\u4e3b\u8981\u56f4\u7ed5 {focus}\uff1b\u7528\u9014\u503e\u5411\uff1a{base}\u3002", 170)
+    return truncate_text(f"{source}\uff1b\u7528\u9014\u503e\u5411\uff1a{base}\u3002", 170)
 
 def render_vault_profile_draft(summary: dict[str, Any]) -> str:
     folders = summary.get("folder_summaries", [])
     mainlines = infer_active_mainlines_for_draft(folders)
     lines = [
-        "# Vault Profile",
+        "# \u6211\u7684\u590d\u76d8\u8bb0\u5fc6",
         "",
-        "这个文件是 Review Agent 理解你的 Obsidian 的主要入口。你只需要维护“用户确认区”；Agent 可以在“Agent 候选区”追加建议。",
+        "\u8fd9\u4efd\u6587\u4ef6\u7528\u6765\u6821\u51c6\u590d\u76d8\u52a9\u624b\u5bf9\u4f60 Obsidian \u7684\u7406\u89e3\u3002\u4f60\u53ef\u4ee5\u76f4\u63a5\u4fee\u6539\u4e0b\u9762\u7684\u5185\u5bb9\uff1b\u4e4b\u540e\u7684\u590d\u76d8\u4f1a\u4f18\u5148\u6309\u8fd9\u91cc\u6765\u7406\u89e3\u4f60\u7684\u9879\u76ee\u3001\u5b66\u4e60\u4e3b\u9898\u548c\u957f\u671f\u4e3b\u7ebf\u3002",
         "",
-        "## 用户确认区",
+        "## \u5df2\u786e\u8ba4\u7684\u7406\u89e3",
         "",
-        "### 文件夹用途",
+        "### \u6587\u4ef6\u5939\u7528\u9014",
         "",
-        "| 文件夹 | 作用（模型初步判断，可直接修改） | 内容线索（来自文件名/标题/正文样本） |",
-        "|---|---|---|",
+        "| \u6587\u4ef6\u5939 | \u8fd9\u4e2a\u6587\u4ef6\u5939\u4e3b\u8981\u653e\u4ec0\u4e48 |",
+        "|---|---|",
     ]
     for item in folders:
-        lines.append(
-            f"| `{item.get('path')}` | {format_profile_table_cell(item.get('role_candidate'))} | "
-            f"{format_profile_table_cell(item.get('content_overview'))} |"
-        )
+        lines.append(f"| `{item.get('path')}` | {format_profile_table_cell(folder_display_role(item))} |")
     lines += [
         "",
-        "### 长期主线",
+        "### \u957f\u671f\u4e3b\u7ebf",
         "",
     ]
     for item in mainlines:
-        lines.append(f"- **{item['name']}**：{item['description']}")
+        lines.extend(format_mainline_draft_item(item))
     lines += [
         "",
-        "### 复盘偏好",
+        "## \u5f85\u786e\u8ba4\u7684\u65b0\u53d1\u73b0",
         "",
-        "- 结论先行",
-        "- 按长期主线组织",
-        "- 避免逐条 block 罗列",
+        "\u8fd9\u91cc\u4f1a\u51fa\u73b0\u590d\u76d8\u52a9\u624b\u6839\u636e\u65b0\u7b14\u8bb0\u53d1\u73b0\u7684\u53ef\u80fd\u8bb0\u5fc6\u3002\u4f60\u53ef\u4ee5\u628a\u201c\u72b6\u6001\u201d\u6539\u6210\u201c\u786e\u8ba4\u201d\u3001\u201c\u62d2\u7edd\u201d\u6216\u201c\u5f85\u5b9a\u201d\uff1b\u786e\u8ba4\u524d\u53ef\u4ee5\u76f4\u63a5\u6539\u201c\u5efa\u8bae\u5185\u5bb9\u201d\u3002\u5220\u9664\u4e0d\u4f1a\u88ab\u5f53\u6210\u62d2\u7edd\u3002",
         "",
-        "## Agent 候选区",
+        "### \u65b0\u6587\u4ef6\u5939",
         "",
-        "> Agent appends candidates here. Change status to confirmed/rejected, edit proposal before confirming if needed, or keep pending. Deleting is not rejection.",
+        "\u6682\u65e0\u65b0\u7684\u5f85\u786e\u8ba4\u5efa\u8bae\u3002",
         "",
-        "### 新文件夹候选",
+        "### \u65b0\u4e3b\u7ebf",
         "",
-        "暂无。",
+        "\u6682\u65e0\u65b0\u7684\u5f85\u786e\u8ba4\u5efa\u8bae\u3002",
         "",
-        "### 新主线候选",
+        "### \u5bf9\u5df2\u6709\u7406\u89e3\u7684\u4fee\u6539\u5efa\u8bae",
         "",
-        "暂无。",
-        "",
-        "### 已确认内容的修改建议",
-        "",
-        "暂无。",
+        "\u6682\u65e0\u65b0\u7684\u5f85\u786e\u8ba4\u5efa\u8bae\u3002",
     ]
     return "\n".join(lines)
 
 
+def format_mainline_draft_item(item: dict[str, str]) -> list[str]:
+    name = item.get("name", "").strip()
+    description = item.get("description", "").strip()
+    source = ""
+    body = description
+    match = re.match(r"\u6765\u6e90\uff1a(`[^`]+`|[^\uff1b]+)\uff1b(.+)", description)
+    if match:
+        source = match.group(1).strip()
+        body = match.group(2).strip()
+    body = body.rstrip("\u3002") + "\u3002" if body else "\u5f85\u4f60\u8865\u5145\u8fd9\u6761\u4e3b\u7ebf\u7684\u542b\u4e49\u3002"
+    lines = [f"- **{name}**", f"  - \u590d\u76d8\u52a9\u624b\u7684\u7406\u89e3\uff1a{body}"]
+    if source:
+        lines.append(f"  - \u76f8\u5173\u6587\u4ef6\u5939\uff1a{source}")
+    return lines
+
 def infer_active_mainlines_for_draft(folders: list[dict[str, Any]]) -> list[dict[str, str]]:
-    candidates: list[tuple[int, dict[str, str]]] = []
+    candidates: list[dict[str, Any]] = []
     seen_names: set[str] = set()
+    has_specific_candidates = any(
+        int(item.get("depth") or 0) >= 2
+        and (item.get("sample_points") or item.get("sample_headings"))
+        and not is_low_value_mainline_folder(str(item.get("path") or ""))
+        for item in folders
+    )
     for item in folders:
         if not item.get("sample_points") and not item.get("sample_headings"):
             continue
-        if is_low_value_mainline_folder(str(item.get("path") or "")):
+        path = str(item.get("path") or "")
+        if is_low_value_mainline_folder(path):
+            continue
+        if has_specific_candidates and is_broad_mainline_parent(path):
             continue
         name = infer_mainline_name_for_folder(item)
         if not name or name in seen_names:
             continue
         seen_names.add(name)
-        overview = str(item.get("content_overview") or item.get("role_candidate") or "").strip()
-        path = str(item.get("path") or "").strip()
-        description = truncate_text(
-            f"\u5019\u9009\u6765\u6e90\uff1a`{path}`\u3002{overview}\u3002\u8bf7\u6309\u4f60\u771f\u5b9e\u7684\u957f\u671f\u76ee\u6807\u6539\u540d\u3001\u5408\u5e76\u6216\u5220\u9664\u3002",
-            220,
+        cluster = mainline_cluster_for_folder(item, name)
+        candidates.append(
+            {
+                "score": mainline_candidate_score(item),
+                "cluster": cluster,
+                "name": name,
+                "path": str(item.get("path") or ""),
+                "description": mainline_description_for_folder(item, cluster),
+            }
         )
-        candidates.append((mainline_candidate_score(item), {"name": name, "description": description}))
-    candidates.sort(key=lambda pair: (-pair[0], pair[1]["name"]))
-    if candidates:
-        return [item for _score, item in candidates[:4]]
+    candidates.sort(key=lambda item: (-int(item["score"]), mainline_cluster_rank(str(item["cluster"])), item["name"]))
+    selected: list[dict[str, str]] = []
+    selected_clusters: set[str] = set()
+    for item in candidates:
+        cluster = str(item["cluster"])
+        if cluster in selected_clusters:
+            continue
+        selected.append({"name": item["name"], "description": item["description"]})
+        selected_clusters.add(cluster)
+        if len(selected) >= 6:
+            break
+    if len(selected) < 4:
+        for item in candidates:
+            pair = {"name": item["name"], "description": item["description"]}
+            if pair in selected:
+                continue
+            selected.append(pair)
+            if len(selected) >= 4:
+                break
+    if selected:
+        return selected[:6]
     return [
         {
             "name": "\u4e3b\u7ebf\u5f85\u786e\u8ba4",
@@ -1747,23 +1896,42 @@ def is_low_value_mainline_folder(path: str) -> bool:
     return any(token in lowered for token in ("clippings", "archive", "trash", "\u526a\u85cf", "\u5f52\u6863", "\u56de\u6536"))
 
 
+def is_broad_mainline_parent(path: str) -> bool:
+    normalized = str(path or "").replace("\\", "/")
+    return normalized in {"1-Project", "2-AI-Agent", "3-RAG", "4-LLM"}
+
+
 def infer_mainline_name_for_folder(folder_summary: dict[str, Any]) -> str:
-    corpus = folder_text_corpus(folder_summary).lower()
+    corpus = mainline_signal_corpus(folder_summary).lower()
     path = str(folder_summary.get("path") or "").strip()
-    if any(k in corpus for k in ("agent", "multi-agent", "\u667a\u80fd\u4f53")) and any(k in corpus for k in ("rag", "retrieval", "\u68c0\u7d22")):
-        return "Agent/RAG \u5b66\u4e60\u4e0e\u9879\u76ee\u6574\u7406"
+    normalized = path.replace("\\", "/")
+    lowered = normalized.lower()
+    if is_interview_folder(folder_summary):
+        return "\u9762\u8bd5\u51c6\u5907\u4e0e\u590d\u76d8"
+    if is_graph_learning_folder(folder_summary):
+        return "\u56fe\u5b66\u4e60/MISGL \u5b9e\u9a8c\u4e0e\u65b9\u6cd5\u5206\u6790"
+    if "personal-review-agent" in lowered or "review agent" in corpus:
+        return "Personal Review Agent \u9879\u76ee\u8bbe\u8ba1\u4e0e\u8fed\u4ee3"
+    if normalized.startswith("1-Project/2-Paper-RAG"):
+        return "RAG \u9879\u76ee\u8bba\u6587\u4e0e\u65b9\u6848\u6750\u6599"
+    if normalized == "3-RAG" or normalized.startswith("3-RAG/"):
+        return "RAG \u8bba\u6587\u4e0e\u9879\u76ee\u6574\u7406"
+    if normalized.startswith("2-AI-Agent/2-Paper"):
+        return "Agent \u8bba\u6587\u4e0e\u673a\u5236\u5b66\u4e60"
+    if normalized.startswith("2-AI-Agent/knowledge"):
+        return "Agent \u5de5\u7a0b\u77e5\u8bc6\u4e0e\u5de5\u5177\u6574\u7406"
+    if normalized == "4-LLM" or normalized.startswith("4-LLM/"):
+        return "LLM \u8bba\u6587\u4e0e\u57fa\u7840\u5b66\u4e60"
+    if any(k in corpus for k in ("experiment", "ablation", "\u5b9e\u9a8c", "\u6307\u6807", "\u7ed3\u679c")):
+        return "\u5b9e\u9a8c\u8bb0\u5f55\u4e0e\u65b9\u6cd5\u5206\u6790"
+    if any(k in corpus for k in ("project", "roadmap", "design", "\u9879\u76ee", "\u65b9\u6848", "\u8bbe\u8ba1")):
+        return "\u9879\u76ee\u65b9\u6848\u4e0e\u63a8\u8fdb"
     if any(k in corpus for k in ("agent", "multi-agent", "\u667a\u80fd\u4f53", "tool", "memory")):
         return "Agent \u673a\u5236\u3001\u5de5\u5177\u548c\u8bb0\u5fc6\u65b9\u5411"
     if any(k in corpus for k in ("rag", "retrieval", "\u68c0\u7d22", "\u77e5\u8bc6\u5e93")):
         return "RAG \u9879\u76ee\u4e0e\u8bba\u6587\u6574\u7406"
     if any(k in corpus for k in ("llm", "transformer", "\u5927\u6a21\u578b", "\u6a21\u578b")):
         return "LLM \u57fa\u7840\u4e0e\u8bba\u6587\u9605\u8bfb"
-    if any(k in corpus for k in ("interview", "\u9762\u8bd5", "\u516b\u80a1")):
-        return "\u9762\u8bd5\u51c6\u5907\u4e0e\u590d\u76d8"
-    if any(k in corpus for k in ("experiment", "ablation", "\u5b9e\u9a8c", "\u6307\u6807")):
-        return "\u5b9e\u9a8c\u8bb0\u5f55\u4e0e\u65b9\u6cd5\u5206\u6790"
-    if any(k in corpus for k in ("project", "roadmap", "design", "\u9879\u76ee", "\u65b9\u6848", "\u8bbe\u8ba1")):
-        return "\u9879\u76ee\u65b9\u6848\u4e0e\u63a8\u8fdb"
     role = str(folder_summary.get("role_candidate") or "").split("\u3002", 1)[0].strip()
     if role and "\u7528\u9014\u4e0d\u660e\u786e" not in role:
         return truncate_text(role, 32)
@@ -1772,19 +1940,138 @@ def infer_mainline_name_for_folder(folder_summary: dict[str, Any]) -> str:
     return ""
 
 
-def mainline_candidate_score(folder_summary: dict[str, Any]) -> int:
-    score = int(folder_summary.get("block_count") or 0)
-    activities = folder_summary.get("activity_counts", {}) or {}
-    for key in ("project_planning", "paper_reading", "experiment_log", "interview_review"):
-        score += int(activities.get(key, 0)) * 3
-    score += len(folder_summary.get("sample_points", []) or []) * 2
+def mainline_cluster_for_folder(folder_summary: dict[str, Any], name: str = "") -> str:
+    path = str(folder_summary.get("path") or "").replace("\\", "/")
+    lowered = path.lower()
+    corpus = mainline_signal_corpus(folder_summary).lower()
+    if is_interview_folder(folder_summary):
+        return "interview_preparation"
+    if is_graph_learning_folder(folder_summary):
+        return "graph_learning"
+    if "personal-review-agent" in lowered or "review agent" in corpus:
+        return "personal_review_agent_project"
+    if path.startswith("1-Project/2-Paper-RAG") or path == "3-RAG" or path.startswith("3-RAG/"):
+        return "rag_project_learning"
+    if path.startswith("2-AI-Agent/2-Paper"):
+        return "agent_paper_learning"
+    if path.startswith("2-AI-Agent/knowledge"):
+        return "agent_engineering"
+    if path == "4-LLM" or path.startswith("4-LLM/"):
+        return "llm_learning"
+    if "project" in lowered or "\u9879\u76ee" in path:
+        return "project_planning"
+    if "paper" in lowered or "\u8bba\u6587" in path:
+        return "paper_learning"
+    if any(k in corpus for k in ("rag", "retrieval", "\u68c0\u7d22", "\u77e5\u8bc6\u5e93")):
+        return "rag_project_learning"
+    if any(k in corpus for k in ("agent", "multi-agent", "\u667a\u80fd\u4f53")):
+        return "agent_general"
+    if name:
+        return safe_mainline_id(name)
+    return "general"
+
+
+def mainline_signal_corpus(folder_summary: dict[str, Any]) -> str:
+    chunks = [str(folder_summary.get("path", ""))]
+    for item in folder_summary.get("sample_headings", []) or []:
+        if isinstance(item, dict):
+            chunks.extend(str(part) for part in item.get("heading_path", []) or [])
+    for item in folder_summary.get("sample_points", []) or []:
+        if isinstance(item, dict):
+            chunks.append(str(item.get("text", "")))
+    return "\n".join(chunks)
+
+
+def is_graph_learning_folder(folder_summary: dict[str, Any]) -> bool:
+    path = str(folder_summary.get("path") or "")
+    lowered = path.lower()
+    corpus = mainline_signal_corpus(folder_summary).lower()
     depth = int(folder_summary.get("depth") or 0)
-    if depth == 0:
-        score -= 8
-    elif depth == 1:
-        score += 3
+    graph_terms = ("misgl", "gnn", "graph learning", "\u56fe\u5b66\u4e60", "\u56fe\u795e\u7ecf", "\u56fe\u795e\u7ecf\u7f51\u7edc")
+    if any(term in lowered for term in ("misgl", "gnn")) or "\u56fe\u5b66\u4e60" in path or "\u56fe\u795e\u7ecf" in path:
+        return True
+    return depth >= 2 and any(k in corpus for k in graph_terms)
+
+
+def is_interview_folder(folder_summary: dict[str, Any]) -> bool:
+    path = str(folder_summary.get("path") or "")
+    lowered = path.lower()
+    corpus = mainline_signal_corpus(folder_summary).lower()
+    activities = folder_summary.get("activity_counts", {}) or {}
+    block_count = max(int(folder_summary.get("block_count") or 0), 1)
+    if "interview" in lowered or "\u9762\u8bd5" in path:
+        return True
+    if any(k in corpus for k in ("interview", "\u9762\u8bd5", "\u516b\u80a1", "\u590d\u76d8\u9898")):
+        return int(activities.get("interview_review", 0)) * 2 >= block_count
+    return int(activities.get("interview_review", 0)) >= 3 and int(activities.get("interview_review", 0)) * 2 >= block_count
+
+
+def mainline_cluster_rank(cluster: str) -> int:
+    ranks = {
+        "personal_review_agent_project": 0,
+        "graph_learning": 1,
+        "rag_project_learning": 2,
+        "agent_paper_learning": 3,
+        "interview_preparation": 4,
+        "agent_engineering": 5,
+        "llm_learning": 6,
+        "project_planning": 7,
+    }
+    return ranks.get(cluster, 20)
+
+
+def folder_name_semantic_score(folder_summary: dict[str, Any]) -> int:
+    path = str(folder_summary.get("path") or "").replace("\\", "/")
+    lowered = path.lower()
+    leaf = lowered.rsplit("/", 1)[-1]
+    score = 0
+    weighted_terms = [
+        (("misgl", "gnn", "\u56fe\u5b66\u4e60", "\u56fe\u795e\u7ecf"), 22),
+        (("interview", "\u9762\u8bd5", "\u516b\u80a1"), 22),
+        (("personal-review-agent", "review-agent"), 20),
+        (("paper-rag",), 16),
+        (("knowledge", "\u77e5\u8bc6"), 14),
+        (("multi-agent",), 14),
+        (("paper", "\u8bba\u6587"), 12),
+        (("rag", "retrieval", "\u68c0\u7d22"), 12),
+        (("llm", "\u5927\u6a21\u578b"), 12),
+        (("project", "\u9879\u76ee"), 8),
+    ]
+    for terms, value in weighted_terms:
+        if any(term in lowered for term in terms):
+            score = max(score, value)
+        if any(term in leaf for term in terms):
+            score = max(score, value + 4)
+    if path and path != "(vault root)":
+        score += min(path.count("/") + 1, 3) * 2
     return score
 
+
+def mainline_candidate_score(folder_summary: dict[str, Any]) -> int:
+    block_count = min(int(folder_summary.get("block_count") or 0), 40)
+    score = block_count
+    activities = folder_summary.get("activity_counts", {}) or {}
+    for key in ("project_planning", "paper_reading", "experiment_log", "interview_review"):
+        score += min(int(activities.get(key, 0)), 10) * 4
+    score += len(folder_summary.get("sample_points", []) or []) * 2
+    score += folder_name_semantic_score(folder_summary)
+    path = str(folder_summary.get("path") or "").replace("\\", "/")
+    depth = int(folder_summary.get("depth") or 0)
+    if depth <= 1:
+        score -= 24
+    elif depth == 2:
+        score += 8
+    else:
+        score += 10
+    if is_graph_learning_folder(folder_summary) or is_interview_folder(folder_summary):
+        score += 18
+    if "personal-review-agent" in path:
+        score += 28
+    if any(token in path for token in ("Paper-RAG", "MISGL", "interview", "knowledge")):
+        score += 10
+    if path in {"1-Project", "2-AI-Agent", "3-RAG", "4-LLM"}:
+        score -= 24
+    return score
 
 def build_confirmed_profile(
     draft_text: str,
@@ -2644,7 +2931,7 @@ def write_runtime_l1_context(
         "",
         "RULES:",
         "- ProfileDraft 用户确认区才是最高优先级事实；Agent 候选区只是弱信号。",
-        "- Candidate decisions use proposal_id + status: confirmed/rejected/pending; deletion is not rejection.",
+        "- 候选决策以 proposal_id + status 为准：confirmed/rejected/pending；删除不等于拒绝。",
         "- 新主线/文件夹用途/用户偏好/长期目标只能追加到 Agent 候选区，不能自动改用户确认区。",
         "- 周复盘先读 review_digest.latest.json；证据不清时再查 changed_blocks.latest.json。",
         "",
@@ -2738,7 +3025,7 @@ def append_profile_candidates_to_draft(
         return 0
 
     if "## Agent 候选区" not in text:
-        text = text.rstrip() + "\n\n## Agent 候选区\n\n> 以下内容由 Agent 自动追加。你可以直接修改、删除，或移动到“用户确认区”。\n"
+        text = text.rstrip() + "\n\n## Agent 候选区\n\n> 以下内容由 Agent 自动追加。确认请把 status 改为 confirmed，拒绝请改为 rejected；保留 pending 表示暂不处理。删除不等于拒绝。\n"
 
     stamp = run_at.strftime("%Y-%m-%d %H:%M")
     addition = "\n\n### 自动候选 " + stamp + "\n\n" + "\n".join(new_lines)
