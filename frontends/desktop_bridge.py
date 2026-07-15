@@ -26,6 +26,7 @@ WS API:
 """
 from __future__ import annotations
 
+import argparse
 import asyncio, contextlib, importlib, json, os, sys
 import threading, time, traceback, uuid
 from dataclasses import dataclass, field
@@ -480,6 +481,141 @@ async def read_json(request) -> dict:
     return {}
 
 
+
+def _obsidian_module():
+    manager.ensure_ga_import_path()
+    return importlib.import_module("memory.obsidian_review.obsidian_review")
+
+
+def _obsidian_cmd_module():
+    manager.ensure_ga_import_path()
+    return importlib.import_module("frontends.obsidian_review_cmd")
+
+
+def _obsidian_args(data: dict) -> argparse.Namespace:
+    return argparse.Namespace(
+        vault=(data.get("vault") or "").strip() or None,
+        config=(data.get("config") or "").strip() or None,
+        period=(data.get("period") or "").strip() or None,
+        from_date=(data.get("from_date") or data.get("fromDate") or "").strip() or None,
+        to_date=(data.get("to_date") or data.get("toDate") or "").strip() or None,
+    )
+
+
+def _obsidian_status(vault_value: str) -> dict:
+    mod = _obsidian_module()
+    vault_raw = str(vault_value or "").strip()
+    if not vault_raw:
+        return {"ok": True, "configured": False, "error": "Vault path is required."}
+    vault = Path(vault_raw).expanduser().resolve()
+    if not vault.exists() or not vault.is_dir():
+        return {"ok": True, "configured": False, "vault_path": str(vault), "error": "Vault path does not exist."}
+
+    state_dir = vault / mod.DEFAULT_CONFIG["state_dir"]
+    output_dir = vault / mod.DEFAULT_CONFIG["output_dir"]
+    profile_dir = vault / mod.DEFAULT_CONFIG["profile_draft_dir"]
+    config_path = state_dir / "config.json"
+    profile_draft = profile_dir / "vault_profile.draft.md"
+    confirmed_profile = state_dir / "vault_profile.confirmed.json"
+    snapshot = state_dir / "review_snapshot.json"
+    latest_digest = state_dir / "review_digest.latest.json"
+    latest_manifest = state_dir / "latest_run_manifest.json"
+    latest_report = ""
+    if latest_manifest.exists():
+        with contextlib.suppress(Exception):
+            manifest = mod.load_json(latest_manifest)
+            latest_report = str(manifest.get("suggested_report") or manifest.get("suggested_report_rel") or "")
+    return {
+        "ok": True,
+        "configured": config_path.exists(),
+        "vault_path": str(vault),
+        "state_dir": str(state_dir),
+        "output_dir": str(output_dir),
+        "config": str(config_path),
+        "profile_draft": str(profile_draft),
+        "confirmed_profile": str(confirmed_profile),
+        "snapshot": str(snapshot),
+        "latest_digest": str(latest_digest),
+        "latest_manifest": str(latest_manifest),
+        "latest_report": latest_report,
+        "exists": {
+            "config": config_path.exists(),
+            "profile_draft": profile_draft.exists(),
+            "confirmed_profile": confirmed_profile.exists(),
+            "snapshot": snapshot.exists(),
+            "latest_digest": latest_digest.exists(),
+            "latest_manifest": latest_manifest.exists(),
+        },
+    }
+
+
+def _obsidian_request_text(data: dict) -> str:
+    vault = (data.get("vault") or "").strip()
+    period = (data.get("period") or "this-week").strip()
+    from_date = (data.get("from_date") or data.get("fromDate") or "").strip()
+    to_date = (data.get("to_date") or data.get("toDate") or "").strip()
+    parts = ["/obsidian-review"]
+    if from_date:
+        parts.extend(["--from", from_date])
+        if to_date:
+            parts.extend(["--to", to_date])
+    elif period:
+        parts.append(period)
+    if vault:
+        parts.extend(["--vault", vault])
+    return " ".join(parts)
+
+
+def _run_obsidian_action(action: str, data: dict) -> dict:
+    mod = _obsidian_module()
+    user_error = getattr(mod, "UserFacingError")
+    try:
+        if action == "status":
+            return _obsidian_status(data.get("vault") or "")
+        if action == "init":
+            vault = (data.get("vault") or "").strip()
+            if not vault:
+                return {"ok": False, "error": "Vault path is required."}
+            result = mod.cmd_init(Path(vault), force=bool(data.get("force")))
+            result["status"] = _obsidian_status(vault)
+            return result
+        if action == "init-profile":
+            vault = (data.get("vault") or "").strip()
+            if not vault:
+                return {"ok": False, "error": "Vault path is required."}
+            mod.cmd_init(Path(vault), force=False)
+            result = mod.cmd_profile_init(_obsidian_args(data))
+            result["status"] = _obsidian_status(vault)
+            return result
+        if action == "confirm-profile":
+            if not (data.get("vault") or data.get("config")):
+                return {"ok": False, "error": "Vault path is required."}
+            result = mod.cmd_profile_confirm(_obsidian_args(data))
+            result["status"] = _obsidian_status(data.get("vault") or "")
+            return result
+        if action == "prepare":
+            if not (data.get("vault") or data.get("config")):
+                return {"ok": False, "error": "Vault path is required."}
+            result = mod.cmd_prepare(_obsidian_args(data))
+            request_text = _obsidian_request_text(data)
+            result["prompt"] = _obsidian_cmd_module().render_report_prompt(request_text, result)
+            result["status"] = _obsidian_status(data.get("vault") or "")
+            return result
+    except user_error as exc:
+        return {"ok": False, "error": str(exc), "status": _obsidian_status(data.get("vault") or "")}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "traceback": traceback.format_exc()}
+    return {"ok": False, "error": f"Unknown obsidian action: {action}"}
+
+
+async def obsidian_handler(request):
+    action = request.match_info["action"]
+    data = await read_json(request)
+    result = await asyncio.to_thread(_run_obsidian_action, action, data)
+    status = 200 if result.get("ok", False) else 400
+    return json_ok(result, status=status)
+
+
 async def status_handler(request):
     return json_ok({
         "ok": True,
@@ -589,6 +725,7 @@ def create_app():
     app.router.add_get("/session/{sid}/messages", messages_handler)
     app.router.add_post("/session/{sid}/cancel", cancel_handler)
     app.router.add_post("/path/open", path_open_handler)
+    app.router.add_post("/obsidian/{action}", obsidian_handler)
 
     # Serve static frontend (desktop/static/)
     static_dir = APP_DIR / "desktop" / "static"

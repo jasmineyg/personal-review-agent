@@ -16,7 +16,7 @@ import os
 import re
 import sys
 import tempfile
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     add_config_args(prepare_parser)
     prepare_parser.add_argument("--period", choices=PERIOD_CHOICES, help="Built-in review period.")
     prepare_parser.add_argument("--from", dest="from_date", help="Start date, inclusive, in YYYY-MM-DD format.")
+    prepare_parser.add_argument('--to', dest='to_date', help='End date, inclusive, in YYYY-MM-DD format.')
 
     finalize_parser = subparsers.add_parser("finalize", help="Commit pending snapshot after report writeback.")
     add_config_args(finalize_parser)
@@ -232,7 +233,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
 
     tz = get_timezone(config.get("timezone", "Asia/Shanghai"))
     run_at = datetime.now(tz)
-    period_info = resolve_period(args.period, args.from_date, config, run_at)
+    period_info = resolve_period(args.period, args.from_date, args.to_date, config, run_at)
     review_id = make_review_id(run_at, vault, period_info)
     run_dir = review_run_dir(state_dir, review_id)
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -255,6 +256,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         )
     current_snapshot, skipped = build_snapshot(vault, config, run_at)
     current_snapshot["review_id"] = review_id
+    selection_diagnostics = period_selection_diagnostics(current_snapshot, period_info, previous_snapshot)
     previous_state = load_json(state_dir / "review_state.json", default={})
     profile_draft_path = vault / config.get("profile_draft_dir", "Reviews/_AgentProfile") / "vault_profile.draft.md"
     memory_dir = state_dir / "memory"
@@ -275,16 +277,19 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         confirmed_profile["profile_source_mode"] = "confirmed_json_cache"
     l1_path = write_runtime_l1_context(vault, config, confirmed_profile, run_at)
 
+    period_files = period_file_summaries(current_snapshot, period_info, confirmed_profile)
+    period_selected_blocks = period_selected_blocks_for_files(current_snapshot, period_info)
     if isinstance(previous_state, dict) and not previous_state.get("last_run"):
-        changed_files = period_file_summaries(current_snapshot, period_info, confirmed_profile)
-        changed_blocks = first_baseline_blocks(current_snapshot, period_info)
-        run_mode = "first_baseline"
+        changed_files = period_files
+        changed_blocks = period_selected_blocks
+        run_mode = "mtime_period"
     else:
-        changed_files = diff_file_summaries(previous_snapshot, current_snapshot, period_info, confirmed_profile)
-        changed_blocks = diff_snapshots(previous_snapshot, current_snapshot, period_info)
-        run_mode = "block_diff"
+        changed_files = period_files
+        diff_blocks = diff_snapshots(previous_snapshot, current_snapshot, period_info)
+        changed_blocks = diff_blocks if diff_blocks else period_selected_blocks
+        run_mode = "mtime_period_with_diff" if diff_blocks else "mtime_period"
 
-    suggested_report = allocate_report_path(vault, output_dir, period_info["period"], run_at, review_id)
+    suggested_report = allocate_report_path(vault, output_dir, period_info, run_at, review_id)
     changed_path = run_dir / "changed_blocks.json"
     digest_path = run_dir / "review_digest.json"
     pending_path = run_dir / "pending_snapshot.json"
@@ -310,6 +315,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "changed_status_counts": count_by(changed_blocks, "status"),
         "candidate_activity_counts": count_by(changed_blocks, "candidate_activity"),
         "skipped": skipped,
+        "selection_diagnostics": selection_diagnostics,
         "preferred_topics": config.get("preferred_topics", []),
         "topic_mode": config.get("topic_mode", "auto_with_preferences"),
         "vault_profile_file": rel_to_vault(confirmed_profile_path, vault),
@@ -359,6 +365,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "date_start": period_info["date_start"],
         "date_end": period_info["date_end"],
         "run_mode": run_mode,
+        "selection_diagnostics": selection_diagnostics,
         "suggested_report": str(suggested_report),
         "suggested_report_rel": rel_to_vault(suggested_report, vault),
         "changed_blocks_file": str(changed_path),
@@ -395,6 +402,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "date_end": period_info["date_end"],
         "changed_files": len(changed_files),
         "changed_blocks": len(changed_blocks),
+        "selection_diagnostics": selection_diagnostics,
         "changed_blocks_file": str(changed_path),
         "review_digest_file": str(digest_path),
         "pending_snapshot": str(pending_path),
@@ -758,7 +766,7 @@ def append_mainline_candidate_once(
 
 
 DRAFT_PROPOSAL_ID_RE = re.compile(r"`?(prop_[0-9a-f]{16})`?")
-DRAFT_STATUS_RE = re.compile("(?:status|\u72b6\u6001|\u5904\u7406)\s*[:\uff1a]\s*`?([^`|,;\s]+)`?", re.IGNORECASE)
+DRAFT_STATUS_RE = re.compile(r"(?:status|\u72b6\u6001|\u5904\u7406)\s*[:\uff1a]\s*`?([^`|,;\s]+)`?", re.IGNORECASE)
 
 
 def empty_draft_memory_sync() -> dict[str, Any]:
@@ -1282,47 +1290,65 @@ def discover_obsidian_vaults() -> list[Path]:
 
 
 def get_timezone(name: str):
-    if ZoneInfo is None:
-        return None
-    try:
-        return ZoneInfo(name)
-    except Exception as exc:
-        raise UserFacingError(f"Invalid timezone in config: {name}") from exc
+    if ZoneInfo is not None:
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            pass
+    fixed_offsets = {
+        "Asia/Shanghai": timezone(timedelta(hours=8)),
+        "UTC": timezone.utc,
+    }
+    if name in fixed_offsets:
+        return fixed_offsets[name]
+    raise UserFacingError(f"Invalid timezone in config: {name}")
 
 
-def resolve_period(period_arg: str | None, from_date: str | None, config: dict[str, Any], run_at: datetime) -> dict[str, str]:
-    if period_arg and from_date:
-        raise UserFacingError("Use either --period or --from, not both.")
+def resolve_period(period_arg: str | None, from_date: str | None, to_date: str | None, config: dict[str, Any], run_at: datetime) -> dict[str, str]:
+    if period_arg and (from_date or to_date):
+        raise UserFacingError('Use either --period or --from/--to, not both.')
+    if to_date and not from_date:
+        raise UserFacingError('Use --to together with --from.')
     if from_date:
         start_date = parse_ymd(from_date)
         start_dt = datetime.combine(start_date, time.min, tzinfo=run_at.tzinfo)
-        return {"period": "since", "date_start": start_dt.isoformat(), "date_end": run_at.isoformat()}
+        if to_date:
+            end_date = parse_ymd(to_date)
+            end_dt = datetime.combine(end_date, time.max.replace(microsecond=0), tzinfo=run_at.tzinfo)
+            period_name = 'custom'
+        else:
+            end_dt = run_at
+            period_name = 'since'
+        if end_dt < start_dt:
+            raise UserFacingError('--to must be on or after --from.')
+        return {'period': period_name, 'date_start': start_dt.isoformat(), 'date_end': end_dt.isoformat()}
 
-    period = period_arg or config.get("default_period") or "this-week"
+    period = period_arg or config.get('default_period') or 'this-week'
     if period not in PERIOD_CHOICES:
-        raise UserFacingError(f"Unsupported period: {period}")
+        raise UserFacingError(f'Unsupported period: {period}')
 
     today = run_at.date()
-    if period == "today":
+    if period == 'today':
         start = datetime.combine(today, time.min, tzinfo=run_at.tzinfo)
         end = run_at
-    elif period == "this-week":
-        week_start = week_start_offset(config.get("week_start", "monday"))
-        delta_days = (today.weekday() - week_start) % 7
-        start = datetime.combine(today - timedelta(days=delta_days), time.min, tzinfo=run_at.tzinfo)
+    elif period == 'this-week':
+        week_start = week_start_offset(config.get('week_start', 'monday'))
+        days_since = (today.weekday() - week_start) % 7
+        start_date = today - timedelta(days=days_since)
+        start = datetime.combine(start_date, time.min, tzinfo=run_at.tzinfo)
         end = run_at
-    elif period == "last-week":
-        week_start = week_start_offset(config.get("week_start", "monday"))
-        delta_days = (today.weekday() - week_start) % 7
-        this_week_start = today - timedelta(days=delta_days)
-        start_date = this_week_start - timedelta(days=7)
-        end_date = this_week_start - timedelta(days=1)
+    elif period == 'last-week':
+        week_start = week_start_offset(config.get('week_start', 'monday'))
+        days_since = (today.weekday() - week_start) % 7
+        this_start = today - timedelta(days=days_since)
+        start_date = this_start - timedelta(days=7)
+        end_date = this_start - timedelta(days=1)
         start = datetime.combine(start_date, time.min, tzinfo=run_at.tzinfo)
         end = datetime.combine(end_date, time.max.replace(microsecond=0), tzinfo=run_at.tzinfo)
     else:  # this-month
         start = datetime.combine(today.replace(day=1), time.min, tzinfo=run_at.tzinfo)
         end = run_at
-    return {"period": period, "date_start": start.isoformat(), "date_end": end.isoformat()}
+    return {'period': period, 'date_start': start.isoformat(), 'date_end': end.isoformat()}
 
 
 def week_start_offset(value: str) -> int:
@@ -1527,7 +1553,7 @@ def infer_folder_content_keywords(folder_summary: dict[str, Any]) -> list[str]:
             append_limited(labels, label, 6)
     for name in note_name_samples(folder_summary, 8):
         for token in re.split(r"[-_\s./\\]+", name):
-            token = token.strip("`#()[]{}:,.;!????????")
+            token = token.strip("`#()[]{}:,.;!?\uFF01\uFF1F\u3002\uFF0C\u3001\uFF1B\uFF1A")
             if len(token) >= 3 and not token.isdigit() and token.lower() not in {"md", "note", "paper", "project"}:
                 append_limited(labels, token[:28], 6)
     return labels[:6]
@@ -2375,8 +2401,19 @@ def first_baseline_blocks(snapshot: dict[str, Any], period_info: dict[str, str])
         for block in file_info.get("blocks", []):
             changed = dict(block)
             changed["status"] = "added"
-            changed["run_note"] = "first_baseline: file modified in period; not proof that this block was newly created"
             blocks.append(strip_internal_fields(changed))
+    return blocks
+
+
+def period_selected_blocks_for_files(snapshot: dict[str, Any], period_info: dict[str, str]) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    for rel, file_info in snapshot.get("files", {}).items():
+        if not file_in_period(file_info, period_info):
+            continue
+        for block in file_info.get("blocks", []):
+            selected = dict(block)
+            selected["status"] = "selected_by_modified_time"
+            blocks.append(strip_internal_fields(selected))
     return blocks
 
 
@@ -2593,6 +2630,71 @@ def is_open_todo(block: dict[str, Any]) -> bool:
     return bool(match and match.group(1) == " ")
 
 
+def period_selection_diagnostics(snapshot: dict[str, Any], period_info: dict[str, str], previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    files = snapshot.get("files", {}) if isinstance(snapshot, dict) else {}
+    start_iso = period_info.get("date_start", "")
+    end_iso = period_info.get("date_end", "")
+    try:
+        start = datetime.fromisoformat(start_iso)
+        end = datetime.fromisoformat(end_iso)
+    except Exception:
+        start = None
+        end = None
+
+    mtimes: list[tuple[datetime, dict[str, str]]] = []
+    in_period: list[dict[str, str]] = []
+    before: list[tuple[datetime, dict[str, str]]] = []
+    after: list[tuple[datetime, dict[str, str]]] = []
+    previous_files = previous.get("files", {}) if isinstance(previous, dict) else {}
+    changed_since_previous = 0
+    same_as_previous = 0
+    new_since_previous = 0
+
+    for rel, file_info in files.items():
+        mtime_text = file_info.get("mtime", "")
+        try:
+            mtime = datetime.fromisoformat(mtime_text)
+        except Exception:
+            continue
+        item = {"file": rel, "mtime": mtime_text}
+        mtimes.append((mtime, item))
+        if start is None or end is None:
+            continue
+        if start <= mtime <= end:
+            in_period.append(item)
+            previous_hash = previous_files.get(rel, {}).get("content_hash") if isinstance(previous_files.get(rel), dict) else None
+            current_hash = file_info.get("content_hash")
+            if previous_hash is None:
+                new_since_previous += 1
+            elif current_hash != previous_hash:
+                changed_since_previous += 1
+            else:
+                same_as_previous += 1
+        elif mtime < start:
+            before.append((mtime, item))
+        else:
+            after.append((mtime, item))
+
+    mtimes.sort(key=lambda pair: pair[0])
+    before.sort(key=lambda pair: pair[0], reverse=True)
+    after.sort(key=lambda pair: pair[0])
+    return {
+        "selection_basis": "file_mtime",
+        "scanned_files": len(files),
+        "files_with_readable_mtime": len(mtimes),
+        "files_in_selected_time": len(in_period),
+        "files_changed_since_last_record": changed_since_previous,
+        "files_same_as_last_record": same_as_previous,
+        "files_new_since_last_record": new_since_previous,
+        "date_start": start_iso,
+        "date_end": end_iso,
+        "oldest_file_mtime": mtimes[0][1]["mtime"] if mtimes else "",
+        "latest_file_mtime": mtimes[-1][1]["mtime"] if mtimes else "",
+        "nearest_before": before[0][1] if before else None,
+        "nearest_after": after[0][1] if after else None,
+    }
+
+
 def file_in_period(file_info: dict[str, Any], period_info: dict[str, str]) -> bool:
     try:
         mtime = datetime.fromisoformat(file_info.get("mtime", ""))
@@ -2606,13 +2708,29 @@ def file_in_period(file_info: dict[str, Any], period_info: dict[str, str]) -> bo
 def strip_internal_fields(block: dict[str, Any]) -> dict[str, Any]:
     result = dict(block)
     result.pop("structural_key", None)
+    result.pop("run_note", None)
     return result
 
 
-def allocate_report_path(vault: Path, output_dir: Path, period: str, run_at: datetime, review_id: str = "") -> Path:
-    date_part = run_at.date().isoformat()
-    id_part = review_id.rsplit("_", 1)[-1] if review_id else ""
-    stem = f"{date_part}_{period}_{id_part}_review" if id_part else f"{date_part}_{period}_review"
+def allocate_report_path(vault: Path, output_dir: Path, period_info: dict[str, str], run_at: datetime, review_id: str = "") -> Path:
+    try:
+        start_date = datetime.fromisoformat(period_info.get("date_start", "")).date().isoformat()
+        end_date = datetime.fromisoformat(period_info.get("date_end", "")).date().isoformat()
+    except Exception:
+        start_date = run_at.date().isoformat()
+        end_date = start_date
+    period = period_info.get("period", "review")
+    if start_date == end_date:
+        stem = f"{start_date}_\u65e5\u590d\u76d8"
+    elif period == "this-week":
+        stem = f"{start_date}\u81f3{end_date}_\u672c\u5468\u590d\u76d8"
+    elif period == "last-week":
+        stem = f"{start_date}\u81f3{end_date}_\u4e0a\u5468\u590d\u76d8"
+    elif period == "this-month":
+        stem = f"{start_date[:7]}_\u6708\u5ea6\u590d\u76d8"
+    else:
+        stem = f"{start_date}\u81f3{end_date}_\u5468\u671f\u590d\u76d8"
+    stem = re.sub(r'[<>:"/\\|?*]+', '-', stem).strip(' .-_') or f"{run_at.date().isoformat()}_\u590d\u76d8"
     candidate = output_dir / f"{stem}.md"
     index = 2
     while candidate.exists():
@@ -2813,11 +2931,6 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
             "changed_files_count": meta.get("changed_files_count"),
             "changed_file_status_counts": meta.get("changed_file_status_counts"),
             "changed_blocks_count": meta.get("changed_blocks_count"),
-            "first_baseline_warning": (
-                "首次基线复盘只表示这些文件在本周期修改过；不要声称所有内容都是本周期新完成。"
-                if meta.get("run_mode") == "first_baseline"
-                else ""
-            ),
         },
         "topic_summaries": sorted(topic_summaries.values(), key=lambda x: (-len(x.get("key_points", [])), x["topic"])),
         "vault_profile_context": compact_vault_profile(vault_profile),
@@ -3165,49 +3278,39 @@ def build_source_index(file_summaries: list[dict[str, Any]], limit: int) -> list
 
 def report_outline() -> list[str]:
     return [
-        "## 1. 本周期工作总览",
-        "## 2. 本周期完成 / 产出事项",
-        "## 3. 按主题分类复盘",
-        "## 4. 项目 / 目标进展",
-        "## 5. 未解决问题与阻塞事项",
-        "## 6. 建议与下一步计划",
-        "## 7. 来源与关联笔记",
+        "## 1. \u672c\u5468\u671f\u603b\u89c8",
+        "## 2. \u503c\u5f97\u590d\u4e60\u548c\u56de\u770b\u7684\u5185\u5bb9",
+        "## 3. \u9879\u76ee\u3001\u5b9e\u9a8c\u4e0e\u4ea7\u51fa\u8fdb\u5c55",
+        "## 4. \u6750\u6599\u4f7f\u7528\u5efa\u8bae",
+        "## 5. \u4e0b\u5468\u671f\u5efa\u8bae",
+        "## 6. \u5173\u8054\u7b14\u8bb0",
     ]
 
 
 def writing_guidelines(run_mode: str) -> list[str]:
-    guidelines = [
-        "以本周期新增/修改的文件为第一证据入口，必须覆盖这些文件；changed blocks 只用于定位文件内细节。",
-        "每个有变化的用户确认区主题都要总结一条逻辑线：本周期哪些文件变化、它们共同说明什么进展、下一步是什么。",
-        "按主题串联工作脉络，不要按文件机械罗列。",
-        "关键结论尽量引用 block.source_link。",
-        "把未完成 checkbox、TODO、blocked、疑问和风险整理到阻塞或继承事项。",
-        "内容产出只能表述为学习、整理、形成方案、记录实验等，不要过度声称完成。",
-        "preferred_topics 是偏好，不是限制；最终主题应服从本周期新增/修改文件的证据。",
-    ]
-    if run_mode == "first_baseline":
-        guidelines.append("这是首次基线复盘：只能说基于本周期修改文件生成，不要声称所有 blocks 都是本周期新增。")
-    return guidelines
+    return review_writer_guidelines()
 
 
 def digest_writing_guidelines(run_mode: str) -> list[str]:
-    guidelines = [
-        "优先阅读 review_digest.latest.json 中的 executive_input、topic_summaries、file_summaries；file_summaries 是主证据。",
-        "不要把 changed blocks 当作报告基点；changed_blocks.latest.json 只用于必要时查证某个文件内的具体来源。",
-        "必须总结所有 file_summaries 里的新增/修改文件；若同一主题下有多个文件，要写成一条逻辑线，而不是逐条罗列 block。",
-        "禁止逐条罗列 block 或写成 `[[source]]: 原文片段` 清单。",
-        "报告必须是复盘文章：先总览，再按主题串联进展、产出、问题和下一步。",
-        "每个主题最多列 3-6 个关键来源，source_link 已经是 Obsidian 双链，必须原样使用，不要再包一层 [[...]]。",
-        "不能留下 `[整体总结]`、`[待填写]` 等占位符；证据不足就写“本周期未从笔记中识别到明确证据”。",
-        "完成事项要区分明确完成和内容产出，不要把阅读笔记夸大成项目完成。",
-        "未完成 checkbox、blocked、疑问、风险应进入未解决问题或下周期继承事项。",
+    return review_writer_guidelines()
+
+
+def review_writer_guidelines() -> list[str]:
+    return [
+        "\u62a5\u544a\u662f\u5199\u7ed9\u7528\u6237\u770b\u7684\u590d\u76d8\u6587\u7ae0\uff0c\u4e0d\u662f\u7a0b\u5e8f\u8fd0\u884c\u65e5\u5fd7\uff1b\u7981\u6b62\u51fa\u73b0 review_id\u3001run_dir\u3001run_mode\u3001first_baseline\u3001changed_blocks\u3001review_digest\u3001file_summaries\u3001finalize\u3001latest \u7b49\u5de5\u7a0b\u8bcd\u3002",
+        "\u4e0d\u8981\u5728\u62a5\u544a\u91cc\u89e3\u91ca\u57fa\u7ebf\u3001diff\u3001\u8bc1\u636e\u5305\u3001\u626b\u63cf\u673a\u5236\uff1b\u8fd9\u4e9b\u53ea\u5c5e\u4e8e\u5185\u90e8\u6267\u884c\u8fc7\u7a0b\u3002",
+        "\u6807\u9898\u5fc5\u987b\u81ea\u7136\u53ef\u8bfb\uff0c\u4f8b\u5982 `# 2026-07-07 \u81f3 2026-07-13 \u590d\u76d8`\uff0c\u4e0d\u8981\u628a\u6587\u4ef6\u540d\u3001\u54c8\u5e0c\u6216\u5185\u90e8\u7f16\u53f7\u5199\u8fdb\u6807\u9898\u3002",
+        "\u4ee5\u7528\u6237\u786e\u8ba4\u533a\u7684\u6587\u4ef6\u5939\u7528\u9014\u3001\u957f\u671f\u4e3b\u7ebf\u548c\u590d\u76d8\u504f\u597d\u4e3a\u6700\u9ad8\u4f18\u5148\u7ea7\uff0c\u5224\u65ad\u8fd9\u6279\u5185\u5bb9\u5bf9\u7528\u6237\u6700\u6709\u5e2e\u52a9\u7684\u4f7f\u7528\u65b9\u5f0f\u3002",
+        "\u4e0d\u8981\u5957\u56fa\u5b9a\u6a21\u677f\uff1b\u8bf7\u5148\u5224\u65ad\u6bcf\u4e2a\u6587\u4ef6\u5939/\u4e3b\u9898\u7684\u610f\u56fe\uff0c\u518d\u51b3\u5b9a\u62a5\u544a\u5e94\u8be5\u5e2e\u52a9\u7528\u6237\u590d\u4e60\u3001\u7b5b\u9009\u3001\u89c4\u5212\u3001\u6392\u9519\u3001\u603b\u7ed3\u8fdb\u5c55\uff0c\u8fd8\u662f\u5efa\u7acb\u4e0b\u4e00\u6b65\u884c\u52a8\u3002",
+        "\u5c11\u6837\u672c\u542f\u53d1\uff1a\u5982\u679c\u67d0\u4e2a\u6587\u4ef6\u5939\u50cf\u8bba\u6587\u7b14\u8bb0\uff0c\u62a5\u544a\u53ef\u4ee5\u5e2e\u7528\u6237\u4e32\u8054\u8bba\u6587\u4e4b\u95f4\u7684\u5171\u540c\u95ee\u9898\u3001\u65b9\u6cd5\u5dee\u5f02\u548c\u590d\u4e60\u987a\u5e8f\u3002",
+        "\u5c11\u6837\u672c\u542f\u53d1\uff1a\u5982\u679c\u67d0\u4e2a\u6587\u4ef6\u5939\u50cf\u5f85\u8bfb\u8d44\u6599\u6c60\u6216\u7f51\u9875\u526a\u85cf\uff0c\u62a5\u544a\u53ef\u4ee5\u5e2e\u7528\u6237\u5224\u65ad\u54ea\u4e9b\u6750\u6599\u6700\u503c\u5f97\u7ec6\u8bfb\u3001\u5206\u522b\u53ef\u80fd\u89e3\u51b3\u4ec0\u4e48\u95ee\u9898\u3002",
+        "\u5c11\u6837\u672c\u542f\u53d1\uff1a\u5982\u679c\u67d0\u4e2a\u6587\u4ef6\u5939\u50cf\u9879\u76ee\u8bb0\u5f55\uff0c\u62a5\u544a\u53ef\u4ee5\u5e2e\u7528\u6237\u63d0\u70bc\u505a\u4e86\u4ec0\u4e48\u3001\u9a8c\u8bc1\u4e86\u4ec0\u4e48\u3001\u5361\u5728\u54ea\u91cc\u3001\u4e0b\u4e00\u6b65\u8be5\u600e\u6837\u5b9e\u9a8c\u3002",
+        "\u5c11\u6837\u672c\u542f\u53d1\u53ea\u662f\u793a\u4f8b\uff0c\u4e0d\u662f\u5206\u7c7b\u89c4\u5219\uff1b\u9047\u5230\u5176\u4ed6\u6587\u4ef6\u5939\u610f\u56fe\u65f6\uff0c\u8bf7\u6309\u7528\u6237\u786e\u8ba4\u533a\u548c\u5185\u5bb9\u672c\u8eab\u6cdb\u5316\u5224\u65ad\u3002",
+        "\u6240\u6709\u6587\u6863\u90fd\u8981\u603b\u7ed3\u63d0\u70bc\uff1a\u8f93\u51fa\u6d1e\u5bdf\u3001\u5173\u7cfb\u3001\u53d6\u820d\u3001\u590d\u4e60\u7ebf\u7d22\u548c\u4e0b\u4e00\u6b65\uff1b\u7981\u6b62\u628a\u539f\u6587\u5185\u5bb9\u6309\u6587\u4ef6\u91cd\u65b0\u644a\u5f00\u8bf4\u4e00\u904d\u3002",
+        "\u540c\u4e00\u4e3b\u9898\u4e0b\u591a\u4e2a\u6587\u4ef6\u8981\u5408\u6210\u4e00\u6761\u903b\u8f91\u7ebf\uff0c\u8bf4\u660e\u5b83\u4eec\u5171\u540c\u63a8\u8fdb\u4e86\u4ec0\u4e48\uff0c\u800c\u4e0d\u662f\u9010\u6587\u4ef6\u6d41\u6c34\u8d26\u3002",
+        "\u6765\u6e90\u53ea\u4fdd\u7559\u5c11\u91cf\u6700\u5173\u952e\u7684 Obsidian \u53cc\u94fe\u4f5c\u4e3a\u56de\u770b\u5165\u53e3\uff1b\u4e0d\u8981\u5199\u6210\u6765\u6e90\u6e05\u5355\u6216\u539f\u6587\u6458\u6284\u5217\u8868\u3002",
+        "\u8bc1\u636e\u4e0d\u8db3\u65f6\u7528\u9762\u5411\u7528\u6237\u7684\u81ea\u7136\u8bed\u8a00\u8bf4\u660e `\u8fd9\u90e8\u5206\u672c\u5468\u671f\u6ca1\u6709\u660e\u663e\u65b0\u8fdb\u5c55`\uff0c\u4e0d\u8981\u66b4\u9732\u5185\u90e8\u539f\u56e0\u3002",
     ]
-    if run_mode == "first_baseline":
-        guidelines.insert(
-            0,
-            "这是首次基线复盘，不是真正精确 diff；要在总览里说明本报告基于本周期修改过的文件建立基线。",
-        )
-    return guidelines
 
 
 def ensure_inside_vault(path: Path, vault: Path, label: str) -> None:

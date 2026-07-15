@@ -104,6 +104,14 @@
       }
       case 'app/path/open':
         return http('/path/open', { method: 'POST', body: params || {} });
+      case 'obsidian/status':
+      case 'obsidian/init':
+      case 'obsidian/init-profile':
+      case 'obsidian/confirm-profile':
+      case 'obsidian/prepare': {
+        const action = method.slice('obsidian/'.length);
+        return http(`/obsidian/${encodeURIComponent(action)}`, { method: 'POST', body: params || {} });
+      }
       case 'app/path/selectGaRoot':
         return http('/config');
       case 'list_continuable_sessions':
@@ -126,6 +134,8 @@
     selectGaRoot: () => rpc('app/path/selectGaRoot', {}),
     openMykeyTemplate: () => rpc('app/path/open', { kind: 'mykeyTemplate' }),
     openMykey: () => rpc('app/path/open', { kind: 'mykey' }),
+    openPath: (target) => rpc('app/path/open', typeof target === 'string' ? { path: target } : (target || {})),
+    obsidian: (action, params = {}) => rpc(`obsidian/${action}`, params),
     pollSession: (sessionId, afterId = 0) => rpc('session/poll', { sessionId, afterId }),
     rpc,
     onBridgeMessage: (cb) => on('bridge-message', cb),

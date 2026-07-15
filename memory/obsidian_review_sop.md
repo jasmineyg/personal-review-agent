@@ -15,7 +15,7 @@
 /obsidian-review init-profile --vault <Vault路径>
 /obsidian-review confirm-profile --vault <Vault路径>
 /obsidian-review this-week --vault <Vault路径>
-/obsidian-review --from YYYY-MM-DD --vault <Vault路径>
+/obsidian-review --from YYYY-MM-DD --to YYYY-MM-DD --vault <Vault路径>
 ```
 
 ## 总原则

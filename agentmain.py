@@ -210,6 +210,9 @@ if __name__ == '__main__':
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--nobg', action='store_true')
     args, _unknown = parser.parse_known_args()
+    if args.input and _unknown and not args.reflect:
+        args.input = ' '.join([args.input] + _unknown)
+        _unknown = []
     _reflect_args = dict(zip([k.lstrip('-') for k in _unknown[::2]], _unknown[1::2])) if _unknown else {}
 
     if args.task and not args.nobg:

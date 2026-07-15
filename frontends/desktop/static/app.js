@@ -40,6 +40,16 @@ const settingsModal = $('settings-modal');
 const errorBanner = $('error-banner');
 const diagnosticsPanel = $('diagnostics-panel');
 const diagnosticsLogEl = $('diagnostics-log');
+const obsidianPanel = $('obsidian-panel');
+const obsidianVaultEl = $('obsidian-vault');
+const obsidianPeriodEl = $('obsidian-period');
+const obsidianFromEl = $('obsidian-from');
+const obsidianToEl = $('obsidian-to');
+const obsidianStateEl = $('obsidian-state');
+const obsidianFeedbackEl = $('obsidian-feedback');
+const obsidianMetricsEl = $('obsidian-metrics');
+const obsidianFilesEl = $('obsidian-files');
+const obsidianLogEl = $('obsidian-log');
 
 
 // ─── Diagnostics ─────────────────────────────────────────────────────────
@@ -822,6 +832,19 @@ async function getCwd() {
 // DOM cache: sessionId -> { fragment, scrollTop }
 const _domCache = new Map();
 
+
+function isInternalObsidianPrompt(content) {
+  const text = String(content || '');
+  return text.includes('Obsidian Review Skill')
+    && text.includes('GenericAgent')
+    && text.includes('prepare')
+    && text.includes('review_id');
+}
+
+function visibleSessionMessages(sess) {
+  return (sess?.messages || []).filter(msg => !(msg.role === 'user' && isInternalObsidianPrompt(msg.content)));
+}
+
 function renderMessages() {
   const sess = state.sessions.get(state.activeId);
   const runtime = sess ? getSessionRuntime(sess) : null;
@@ -841,7 +864,8 @@ function renderMessages() {
     runtime.lastMessageType = null;
   }
 
-  const hasSavedMessages = !!sess && sess.messages.length > 0;
+  const visibleMessages = visibleSessionMessages(sess);
+  const hasSavedMessages = visibleMessages.length > 0;
   const hasDraft = !!runtime?.assistantDraft && !runtime.assistantDraft.finalized;
   if (!sess || (!hasSavedMessages && !hasDraft)) {
     messagesEl.innerHTML = '';
@@ -875,7 +899,7 @@ function renderMessages() {
     messagesEl.scrollTop = cached.scrollTop;
   } else {
     messagesEl.innerHTML = '';
-    for (const m of sess.messages) renderMessage(m, false);
+    for (const m of visibleMessages) renderMessage(m, false);
     if (hasDraft) renderAssistantDraft(sess, runtime.assistantDraft);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
@@ -888,6 +912,7 @@ function prepareMessagesForContent() {
 }
 
 function renderMessage(msg, append = true) {
+  if (msg?.role === 'user' && isInternalObsidianPrompt(msg.content)) return;
   prepareMessagesForContent();
 
   if (msg.role === 'user') {
@@ -1378,6 +1403,29 @@ function upsertPolledMessage(sess, raw, { partial = false } = {}) {
   if (isActiveSession(sess)) renderMessage(msg);
 }
 
+
+function finishObsidianWritingTask(sess, status, detail = '') {
+  const runtime = sess ? getSessionRuntime(sess) : null;
+  const task = runtime?.obsidianWritingTask;
+  if (!task) return;
+  runtime.obsidianWritingTask = null;
+  obsidianUi.writing = false;
+  setObsidianBusy(false);
+  if (status === 'done') {
+    setObsidianState('\u590d\u76d8\u5df2\u751f\u6210\u5b8c\u6210\u3002', 'ok');
+    setObsidianFeedback('\u590d\u76d8\u5df2\u5b8c\u6210', [
+      '\u53f3\u4fa7\u5bf9\u8bdd\u533a\u5df2\u663e\u793a\u751f\u6210\u7ed3\u679c\u3002',
+      '\u5185\u90e8\u6574\u7406\u6307\u4ee4\u5df2\u9690\u85cf\uff0c\u4e0d\u4f1a\u518d\u628a\u5927\u6bb5\u4ee3\u7801\u5185\u5bb9\u5c55\u793a\u7ed9\u4f60\u3002',
+    ], 'ok');
+  } else if (status === 'failed') {
+    setObsidianState('\u590d\u76d8\u751f\u6210\u6ca1\u6709\u5b8c\u6210\u3002', 'err');
+    setObsidianFeedback('\u590d\u76d8\u751f\u6210\u5931\u8d25', [detail || '\u8bf7\u68c0\u67e5\u53f3\u4fa7\u5bf9\u8bdd\u533a\u7684\u9519\u8bef\u63d0\u793a\u3002'], 'err');
+  } else if (status === 'cancelled') {
+    setObsidianState('\u590d\u76d8\u751f\u6210\u5df2\u505c\u6b62\u3002', 'busy');
+    setObsidianFeedback('\u5df2\u505c\u6b62\u751f\u6210', ['\u9700\u8981\u7ee7\u7eed\u65f6\uff0c\u53ef\u4ee5\u518d\u70b9\u51fb\u201c\u5f00\u59cb\u5199\u590d\u76d8\u201d\u3002'], 'busy');
+  }
+}
+
 async function pollSessionMessages(sess) {
   if (!sess) return;
   const runtime = getSessionRuntime(sess);
@@ -1395,6 +1443,7 @@ async function pollSessionMessages(sess) {
       setBusy(busy, busy ? 'Thinking…' : null, sess);
       if (!busy) {
         finalizeAssistantReply(sess);
+        finishObsidianWritingTask(sess, 'done');
         break;
       }
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -1403,12 +1452,13 @@ async function pollSessionMessages(sess) {
     addDiagnostic('error', 'Polling failed', e);
     showError('Polling failed: ' + (e.message || e));
     setBusy(false, null, sess);
+    finishObsidianWritingTask(sess, 'failed', e.message || String(e));
   } finally {
     runtime.polling = false;
   }
 }
 
-async function sendPrompt(text, images = []) {
+async function sendPrompt(text, images = [], options = {}) {
   if (!state.bridgeReady) {
     showError('Bridge is not ready.');
     return;
@@ -1427,18 +1477,22 @@ async function sendPrompt(text, images = []) {
     return img.id;
   });
 
-  const localUserMsg = { role: 'user', content: text, image_ids: imageIds };
-  sess.messages.push(localUserMsg);
-  renderMessage(localUserMsg);
+  const localUserMsg = { role: 'user', content: text, image_ids: imageIds, hidden: !!options.hideUserMessage };
+  if (!options.hideUserMessage) {
+    sess.messages.push(localUserMsg);
+    renderMessage(localUserMsg);
+  }
   startTaskTimer(sess);
   if (sess.untitled || isUntitledSessionTitle(sess.title)) {
-    sess.title = text.trim().slice(0, 40) + (text.trim().length > 40 ? '…' : '');
+    const titleSource = options.title || text;
+    const titleText = String(titleSource).trim();
+    sess.title = titleText.slice(0, 40) + (titleText.length > 40 ? '...' : '');
     sess.untitled = false;
     sessionTitleEl.textContent = sess.title;
     renderSessionList();
   }
 
-  setBusy(true, 'Thinking…', sess);
+  setBusy(true, options.busyLabel || 'Thinking...', sess);
   try {
     const res = await window.ga.rpc('session/prompt', {
       sessionId: await ensureBridgeSession(sess),
@@ -1455,10 +1509,12 @@ async function sendPrompt(text, images = []) {
     }
     runtime.forcePollOnce = true;
     pollSessionMessages(sess);
+    return { ok: true, sessionId: sess.id, bridgeSessionId: sess.bridgeSessionId };
   } catch (e) {
     sess.messages.push({ role: 'error', content: e.message || String(e) });
     if (isActiveSession(sess)) renderMessage({ role: 'error', content: e.message || String(e) });
     setBusy(false, null, sess);
+    return { ok: false, error: e };
   }
 }
 
@@ -1470,6 +1526,7 @@ async function cancelPrompt() {
     const res = await window.ga.rpc('session/cancel', { sessionId: sess?.bridgeSessionId || state.activeId });
     if (res.error) throw new Error(res.error.message || res.error);
     setBusy(false, null, sess);  // clear busy immediately; don't wait for server-side cancelled event
+    finishObsidianWritingTask(sess, 'cancelled');
     return true;
   } catch (e) {
     showSystem('Stop failed: ' + (e.message || e));
@@ -1712,6 +1769,350 @@ async function saveSettings() {
     showError('Failed to save settings: ' + (err.message || err));
   } finally {
     saveBtn.disabled = false;
+  }
+}
+
+
+// Obsidian Review workspace
+const obsidianUi = {
+  busy: false,
+  lastPrepared: null,
+};
+
+const OBSIDIAN_PERIOD_LABELS = {
+  'today': '\u4eca\u5929',
+  'this-week': '\u672c\u5468',
+  'last-week': '\u4e0a\u5468',
+  'this-month': '\u672c\u6708',
+  'custom': '\u81ea\u5b9a\u4e49\u65e5\u671f',
+  'since': '\u4ece\u6307\u5b9a\u65e5\u671f\u5f00\u59cb',
+};
+
+function getObsidianButtons() {
+  return [
+    $('obsidian-status'),
+    $('obsidian-first-run'),
+    $('obsidian-init-profile'),
+    $('obsidian-confirm-profile'),
+    $('obsidian-prepare'),
+    $('obsidian-send'),
+  ].filter(Boolean);
+}
+
+function friendlyObsidianError(message) {
+  const raw = String(message || '');
+  if (/Vault path|path is required/i.test(raw)) return '\u8bf7\u5148\u586b\u5199\u7b14\u8bb0\u5e93\u8def\u5f84\u3002';
+  if (/does not exist|not a directory/i.test(raw)) return '\u6ca1\u6709\u627e\u5230\u8fd9\u4e2a\u7b14\u8bb0\u5e93\uff0c\u8bf7\u68c0\u67e5\u8def\u5f84\u662f\u5426\u6b63\u786e\u3002';
+  if (/Missing confirmed vault profile|profile-init|confirm-profile/i.test(raw)) return '\u8fd8\u9700\u8981\u5148\u5b8c\u6210\u7b2c\u4e00\u6b21\u4f7f\u7528\u6d41\u7a0b\uff1a\u5148\u8ba9\u6211\u719f\u6089\u4f60\u7684\u7b14\u8bb0\u5e93\uff0c\u518d\u5728 Obsidian \u91cc\u68c0\u67e5\u8bf4\u660e\u3002';
+  if (/snapshot/i.test(raw)) return '\u8fd8\u6ca1\u6709\u5efa\u597d\u7b2c\u4e00\u6b21\u8bb0\u5f55\uff0c\u8bf7\u5148\u70b9\u51fb\u201c\u6211\u5df2\u68c0\u67e5\uff0c\u5f00\u59cb\u4f7f\u7528\u201d\u3002';
+  return raw || '\u64cd\u4f5c\u6ca1\u6709\u5b8c\u6210\u3002';
+}
+
+function setObsidianBusy(busy) {
+  obsidianUi.busy = !!busy;
+  for (const btn of getObsidianButtons()) {
+    if (btn.id === 'obsidian-send') {
+      btn.disabled = busy || !obsidianUi.lastPrepared?.prompt;
+    } else {
+      btn.disabled = busy;
+    }
+  }
+}
+
+function setObsidianState(text, kind = 'idle') {
+  if (!obsidianStateEl) return;
+  obsidianStateEl.textContent = text;
+  obsidianStateEl.className = `obsidian-state ${kind}`;
+}
+
+function setObsidianFeedback(title, lines = [], kind = 'idle') {
+  if (!obsidianFeedbackEl) return;
+  if (!title && !lines.length) {
+    obsidianFeedbackEl.classList.add('hidden');
+    obsidianFeedbackEl.innerHTML = '';
+    return;
+  }
+  const list = lines.filter(Boolean).map(line => `<li>${escapeHtml(String(line))}</li>`).join('');
+  obsidianFeedbackEl.className = `obsidian-feedback ${kind}`;
+  obsidianFeedbackEl.innerHTML = `<strong>${escapeHtml(title)}</strong>${list ? `<ul>${list}</ul>` : ''}`;
+  obsidianFeedbackEl.classList.remove('hidden');
+}
+
+function setObsidianLog(payload) {
+  if (!obsidianLogEl) return;
+  if (typeof payload === 'string') {
+    obsidianLogEl.textContent = payload;
+    return;
+  }
+  if (!payload || typeof payload !== 'object') {
+    obsidianLogEl.textContent = '\u8fd8\u6ca1\u6709\u8fd0\u884c\u8bb0\u5f55\u3002';
+    return;
+  }
+  const lines = [];
+  if (payload.ok === false) lines.push('\u7ed3\u679c\uff1a' + friendlyObsidianError(payload.error));
+  else lines.push('\u7ed3\u679c\uff1a\u5df2\u5b8c\u6210');
+  if (payload.action === 'profile-init') lines.push('\u5df2\u751f\u6210\u4e00\u4efd\u9700\u8981\u4f60\u68c0\u67e5\u7684\u8bf4\u660e\u3002');
+  if (payload.action === 'profile-confirm') lines.push('\u4f60\u7684\u786e\u8ba4\u5df2\u4fdd\u5b58\uff0c\u4e4b\u540e\u53ef\u4ee5\u5f00\u59cb\u590d\u76d8\u3002');
+  if (payload.action === 'prepare') lines.push(`\u5df2\u6574\u7406 ${payload.changed_files || 0} \u4e2a\u6709\u53d8\u5316\u7684\u6587\u4ef6\uff0c${payload.changed_blocks || 0} \u6761\u53ef\u7528\u5185\u5bb9\u3002`);
+  lines.push('\u76f8\u5173\u6587\u4ef6\u53ef\u5728\u4e0a\u65b9\u5217\u8868\u6253\u5f00\u3002');
+  obsidianLogEl.textContent = lines.join('\n');
+}
+
+function obsidianPayload(includePeriod = true) {
+  const period = obsidianPeriodEl?.value || 'this-week';
+  const payload = { vault: (obsidianVaultEl?.value || '').trim() };
+  if (includePeriod) {
+    if (period === 'custom') {
+      payload.from_date = obsidianFromEl?.value || '';
+      payload.to_date = obsidianToEl?.value || '';
+    } else {
+      payload.period = period;
+    }
+  }
+  return payload;
+}
+
+function updateObsidianDateMode() {
+  const custom = obsidianPeriodEl?.value === 'custom';
+  if (obsidianFromEl) obsidianFromEl.disabled = !custom;
+  if (obsidianToEl) obsidianToEl.disabled = !custom;
+}
+
+function openObsidianPanel() {
+  obsidianPanel?.classList.remove('hidden');
+  const savedVault = localStorage.getItem('ga.obsidian.vault') || '';
+  if (obsidianVaultEl && !obsidianVaultEl.value) obsidianVaultEl.value = savedVault;
+  updateObsidianDateMode();
+  obsidianVaultEl?.focus();
+}
+
+function closeObsidianPanel() {
+  obsidianPanel?.classList.add('hidden');
+}
+
+function renderObsidianMetrics(result) {
+  if (!obsidianMetricsEl) return;
+  const items = [];
+  if (result && Object.prototype.hasOwnProperty.call(result, 'changed_files')) items.push(['\u6709\u53d8\u5316\u7684\u6587\u4ef6', result.changed_files]);
+  if (result && Object.prototype.hasOwnProperty.call(result, 'changed_blocks')) items.push(['\u53ef\u7528\u5185\u5bb9', result.changed_blocks]);
+  if (result?.period) items.push(['\u65f6\u95f4\u8303\u56f4', OBSIDIAN_PERIOD_LABELS[result.period] || result.period]);
+  if (!items.length && result?.status?.exists) {
+    const exists = result.status.exists;
+    items.push(['\u8bbe\u7f6e', exists.config ? '\u5df2\u5b8c\u6210' : '\u672a\u5b8c\u6210']);
+    items.push(['\u4e86\u89e3\u72b6\u6001', exists.confirmed_profile ? '\u5df2\u5b8c\u6210' : (exists.profile_draft ? '\u7b49\u4f60\u68c0\u67e5' : '\u5c1a\u672a\u5f00\u59cb')]);
+    items.push(['\u53ef\u590d\u76d8', exists.snapshot ? '\u662f' : '\u8fd8\u4e0d\u884c']);
+  }
+  if (!items.length) {
+    obsidianMetricsEl.classList.add('hidden');
+    obsidianMetricsEl.innerHTML = '';
+    return;
+  }
+  obsidianMetricsEl.innerHTML = items.map(([label, value]) => (
+    `<div class="obsidian-metric"><strong>${escapeHtml(String(value))}</strong><span>${escapeHtml(label)}</span></div>`
+  )).join('');
+  obsidianMetricsEl.classList.remove('hidden');
+}
+
+function obsidianPathRows(result) {
+  const status = result?.status || result || {};
+  const rows = [
+    ['\u7ed9\u4f60\u68c0\u67e5\u7684\u8bf4\u660e', result?.profile_draft || status.profile_draft],
+    ['\u5df2\u4fdd\u5b58\u7684\u8bf4\u660e', result?.confirmed_profile || status.confirmed_profile],
+    ['\u672c\u6b21\u590d\u76d8\u7d20\u6750', result?.review_digest_file || status.latest_digest],
+    ['\u53d8\u5316\u660e\u7ec6', result?.changed_blocks_file],
+    ['\u540e\u7eed\u4e8b\u9879', result?.review_state_update_file],
+    ['\u53ef\u9009\u66f4\u65b0', result?.memory_proposals_file],
+    ['\u62a5\u544a\u4fdd\u5b58\u4f4d\u7f6e', result?.suggested_report || status.latest_report],
+  ];
+  return rows.filter(([, value]) => value);
+}
+
+function renderObsidianFiles(result) {
+  if (!obsidianFilesEl) return;
+  const rows = obsidianPathRows(result);
+  if (!rows.length) {
+    obsidianFilesEl.classList.add('hidden');
+    obsidianFilesEl.innerHTML = '';
+    return;
+  }
+  obsidianFilesEl.innerHTML = rows.map(([label, value]) => `
+    <div class="obsidian-file-row">
+      <span>${escapeHtml(label)}</span>
+      <span class="obsidian-path" title="${escapeHtml(String(value))}">${escapeHtml(String(value))}</span>
+      <button class="btn obsidian-open" data-path="${escapeHtml(String(value))}">\u6253\u5f00</button>
+    </div>
+  `).join('');
+  obsidianFilesEl.classList.remove('hidden');
+}
+
+
+function formatObsidianDay(value) {
+  if (!value) return '';
+  const match = String(value).match(/\d{4}-\d{2}-\d{2}/);
+  return match ? match[0] : String(value);
+}
+
+function formatObsidianDateTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ').slice(0, 19);
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function renderObsidianResult(result) {
+  renderObsidianMetrics(result);
+  renderObsidianFiles(result);
+  setObsidianLog(result);
+  if (result?.ok === false) {
+    const friendly = friendlyObsidianError(result.error);
+    setObsidianState(friendly, 'err');
+    setObsidianFeedback('\u8fd9\u4e00\u6b65\u8fd8\u6ca1\u5b8c\u6210', [
+      friendly,
+      '\u5982\u679c\u4f60\u662f\u7b2c\u4e00\u6b21\u4f7f\u7528\uff0c\u8bf7\u5148\u70b9\u51fb\u201c\u7b2c\u4e00\u6b21\u4f7f\u7528\uff1a\u5f00\u59cb\u719f\u6089\u6211\u7684\u7b14\u8bb0\u5e93\u201d\u3002',
+    ], 'err');
+    return;
+  }
+  if (result?.action === 'prepare') {
+    const changedFiles = result.changed_files || 0;
+    const changedBlocks = result.changed_blocks || 0;
+    const diag = result.selection_diagnostics || result.meta?.selection_diagnostics || {};
+    const periodLabel = OBSIDIAN_PERIOD_LABELS[result.period] || result.period || '\u5f53\u524d\u9009\u62e9\u8303\u56f4';
+    const periodRange = result.date_start && result.date_end
+      ? `${formatObsidianDay(result.date_start)} \u81f3 ${formatObsidianDay(result.date_end)}`
+      : periodLabel;
+    if (!changedFiles && !changedBlocks) {
+      const lines = [`\u672c\u6b21\u65f6\u95f4\u8303\u56f4\uff1a${periodRange}\u3002`];
+      if (diag.selection_basis === 'file_mtime') {
+        lines.push('\u6211\u73b0\u5728\u662f\u6309\u6587\u4ef6\u7684\u201c\u6700\u540e\u4fee\u6539\u65f6\u95f4\u201d\u6765\u627e\u590d\u76d8\u7d20\u6750\u3002');
+        const filesInSelected = diag.files_in_selected_time || 0;
+        if (Object.prototype.hasOwnProperty.call(diag, 'scanned_files')) {
+          lines.push(`\u8fd9\u6b21\u5171\u68c0\u67e5\u4e86 ${diag.scanned_files} \u4e2a\u6587\u4ef6\uff0c\u5176\u4e2d ${filesInSelected} \u4e2a\u6587\u4ef6\u7684\u6700\u540e\u4fee\u6539\u65f6\u95f4\u843d\u5728\u6240\u9009\u8303\u56f4\u5185\u3002`);
+        }
+        if (!filesInSelected) {
+          if (diag.nearest_before?.file) lines.push(`\u8303\u56f4\u4e4b\u524d\u6700\u8fd1\u7684\u6587\u4ef6\uff1a${diag.nearest_before.file}\uff08${formatObsidianDateTime(diag.nearest_before.mtime)}\uff09\u3002`);
+          if (diag.nearest_after?.file) lines.push(`\u8303\u56f4\u4e4b\u540e\u6700\u8fd1\u7684\u6587\u4ef6\uff1a${diag.nearest_after.file}\uff08${formatObsidianDateTime(diag.nearest_after.mtime)}\uff09\u3002`);
+          lines.push('\u5982\u679c\u4f60\u7684\u7b14\u8bb0\u5185\u5bb9\u65e5\u671f\u5728\u8fd9\u6bb5\u65f6\u95f4\uff0c\u4f46\u6587\u4ef6\u6700\u8fd1\u6ca1\u6709\u88ab\u4fee\u6539\uff0c\u5c31\u4f1a\u51fa\u73b0 0 \u4e2a\u7d20\u6750\u3002');
+        } else {
+          lines.push('\u6709\u6587\u4ef6\u843d\u5728\u6240\u9009\u8303\u56f4\u5185\uff0c\u4f46\u6ca1\u6709\u627e\u5230\u53ef\u6574\u7406\u7684\u5185\u5bb9\u53d8\u5316\u3002');
+        }
+      } else {
+        lines.push('\u4f60\u53ef\u4ee5\u6362\u4e00\u4e2a\u65f6\u95f4\u8303\u56f4\uff0c\u6216\u5148\u786e\u8ba4\u8fd9\u6bb5\u65f6\u95f4\u7684\u7b14\u8bb0\u6587\u4ef6\u6709\u6ca1\u6709\u88ab\u4fee\u6539\u8fc7\u3002');
+      }
+      setObsidianState('\u8fd9\u6bb5\u65f6\u95f4\u91cc\u6ca1\u6709\u627e\u5230\u53ef\u7528\u5185\u5bb9\u3002', 'busy');
+      setObsidianFeedback('\u6ca1\u6709\u627e\u5230\u590d\u76d8\u7d20\u6750', lines, 'busy');
+    } else {
+      setObsidianState(`\u590d\u76d8\u7d20\u6750\u5df2\u6574\u7406\u597d\uff1a${changedFiles} \u4e2a\u6587\u4ef6\uff0c${changedBlocks} \u6761\u5185\u5bb9\u3002`, 'ok');
+      setObsidianFeedback('\u53ef\u4ee5\u5f00\u59cb\u5199\u590d\u76d8\u4e86', [
+        `\u672c\u6b21\u65f6\u95f4\u8303\u56f4\uff1a${periodRange}\u3002`,
+        '\u70b9\u51fb\u201c\u5f00\u59cb\u5199\u590d\u76d8\u201d\uff0c\u6211\u4f1a\u628a\u6574\u7406\u597d\u7684\u5185\u5bb9\u53d1\u5230\u5f53\u524d\u804a\u5929\u3002',
+        '\u4f60\u4e5f\u53ef\u4ee5\u5148\u6253\u5f00\u4e0b\u65b9\u6587\u4ef6\uff0c\u770b\u770b\u6211\u6574\u7406\u51fa\u4e86\u4ec0\u4e48\u3002',
+      ], 'ok');
+    }
+  } else if (result?.action === 'profile-init') {
+    setObsidianState('\u6211\u5df2\u7ecf\u521d\u6b65\u4e86\u89e3\u4f60\u7684\u7b14\u8bb0\u5e93\u3002', 'ok');
+    setObsidianFeedback('\u4e0b\u4e00\u6b65\uff1a\u8bf7\u4f60\u68c0\u67e5\u4e00\u4e0b', [
+      '\u6253\u5f00\u201c\u7ed9\u4f60\u68c0\u67e5\u7684\u8bf4\u660e\u201d\uff0c\u770b\u770b\u6211\u5bf9\u4f60\u76ee\u5f55\u7ed3\u6784\u548c\u590d\u76d8\u504f\u597d\u7684\u7406\u89e3\u662f\u5426\u51c6\u786e\u3002',
+      '\u4fee\u6539\u5b8c\u540e\u56de\u5230\u8fd9\u91cc\uff0c\u70b9\u51fb\u201c\u6211\u5df2\u68c0\u67e5\uff0c\u5f00\u59cb\u4f7f\u7528\u201d\u3002',
+    ], 'ok');
+  } else if (result?.action === 'profile-confirm') {
+    setObsidianState('\u597d\u7684\uff0c\u6211\u5df2\u8bb0\u4f4f\u4f60\u7684\u786e\u8ba4\u3002', 'ok');
+    setObsidianFeedback('\u73b0\u5728\u53ef\u4ee5\u505a\u590d\u76d8\u4e86', [
+      '\u9009\u62e9\u4e00\u4e2a\u65f6\u95f4\u8303\u56f4\uff0c\u6bd4\u5982\u672c\u5468\u6216\u672c\u6708\u3002',
+      '\u70b9\u51fb\u201c\u6574\u7406\u590d\u76d8\u7d20\u6750\u201d\uff0c\u6211\u4f1a\u627e\u51fa\u8fd9\u6bb5\u65f6\u95f4\u6709\u4ef7\u503c\u7684\u53d8\u5316\u3002',
+    ], 'ok');
+  } else if (result?.configured || result?.status?.configured) {
+    const exists = result.exists || result.status?.exists || {};
+    if (exists.confirmed_profile && exists.snapshot) {
+      setObsidianState('\u8fd9\u4e2a\u7b14\u8bb0\u5e93\u5df2\u7ecf\u53ef\u4ee5\u4f7f\u7528\u3002', 'ok');
+      setObsidianFeedback('\u72b6\u6001\u6b63\u5e38', ['\u4f60\u53ef\u4ee5\u9009\u62e9\u65f6\u95f4\u8303\u56f4\uff0c\u7136\u540e\u6574\u7406\u590d\u76d8\u7d20\u6750\u3002'], 'ok');
+    } else if (exists.profile_draft) {
+      setObsidianState('\u6211\u5df2\u6574\u7406\u51fa\u4e00\u4efd\u8bf4\u660e\uff0c\u7b49\u4f60\u68c0\u67e5\u3002', 'busy');
+      setObsidianFeedback('\u8bf7\u5148\u68c0\u67e5\u8bf4\u660e', ['\u6253\u5f00\u4e0b\u65b9\u201c\u7ed9\u4f60\u68c0\u67e5\u7684\u8bf4\u660e\u201d\uff0c\u4fee\u6539\u540e\u70b9\u51fb\u201c\u6211\u5df2\u68c0\u67e5\uff0c\u5f00\u59cb\u4f7f\u7528\u201d\u3002'], 'busy');
+    } else {
+      setObsidianState('\u8fd9\u4e2a\u7b14\u8bb0\u5e93\u8fd8\u9700\u8981\u5148\u719f\u6089\u4e00\u4e0b\u3002', 'busy');
+      setObsidianFeedback('\u5efa\u8bae\u4ece\u7b2c\u4e00\u6b21\u4f7f\u7528\u5f00\u59cb', ['\u70b9\u51fb\u201c\u7b2c\u4e00\u6b21\u4f7f\u7528\uff1a\u5f00\u59cb\u719f\u6089\u6211\u7684\u7b14\u8bb0\u5e93\u201d\u3002'], 'busy');
+    }
+  } else {
+    setObsidianState(result?.error ? friendlyObsidianError(result.error) : '\u8fd8\u6ca1\u6709\u5f00\u59cb\u3002', result?.error ? 'err' : 'idle');
+    setObsidianFeedback('\u7b2c\u4e00\u6b21\u4f7f\u7528\u63d0\u793a', ['\u586b\u5199\u7b14\u8bb0\u5e93\u8def\u5f84\u540e\uff0c\u70b9\u51fb\u201c\u7b2c\u4e00\u6b21\u4f7f\u7528\uff1a\u5f00\u59cb\u719f\u6089\u6211\u7684\u7b14\u8bb0\u5e93\u201d\u3002'], result?.error ? 'err' : 'idle');
+  }
+}
+
+async function runObsidianAction(action, options = {}) {
+  const payload = obsidianPayload(options.includePeriod !== false);
+  if (!payload.vault) {
+    setObsidianState('\u8bf7\u5148\u586b\u5199\u7b14\u8bb0\u5e93\u8def\u5f84\u3002', 'err');
+    setObsidianFeedback('\u8fd8\u7f3a\u4e00\u4e2a\u8def\u5f84', ['\u628a Obsidian \u7b14\u8bb0\u5e93\u7684\u672c\u5730\u8def\u5f84\u7c98\u8d34\u5230\u8f93\u5165\u6846\u91cc\uff0c\u4f8b\u5982 D:\\download\\Obsidian\\Jasmine\u3002'], 'err');
+    return null;
+  }
+  localStorage.setItem('ga.obsidian.vault', payload.vault);
+  setObsidianBusy(true);
+  setObsidianState('\u6b63\u5728\u5904\u7406\uff0c\u8bf7\u7a0d\u7b49...', 'busy');
+  setObsidianFeedback('\u6b63\u5728\u6574\u7406', ['\u5982\u679c\u7b14\u8bb0\u5f88\u591a\uff0c\u8fd9\u4e00\u6b65\u53ef\u80fd\u9700\u8981\u4e00\u70b9\u65f6\u95f4\u3002'], 'busy');
+  try {
+    const result = await window.ga.obsidian(action, payload);
+    if (action === 'prepare' && result?.prompt) obsidianUi.lastPrepared = result;
+    renderObsidianResult(result);
+    return result;
+  } catch (err) {
+    const data = err.data || { ok: false, error: err.message || String(err) };
+    renderObsidianResult(data);
+    return null;
+  } finally {
+    setObsidianBusy(false);
+  }
+}
+
+async function sendPreparedObsidianPrompt() {
+  const prepared = obsidianUi.lastPrepared;
+  if (!prepared?.prompt) {
+    setObsidianState('\u8bf7\u5148\u70b9\u51fb\u201c\u6574\u7406\u590d\u76d8\u7d20\u6750\u201d\u3002', 'err');
+    setObsidianFeedback('\u8fd8\u6ca1\u6709\u53ef\u5199\u7684\u5185\u5bb9', ['\u7d20\u6750\u6574\u7406\u597d\u4ee5\u540e\uff0c\u8fd9\u4e2a\u6309\u94ae\u4f1a\u628a\u5199\u4f5c\u4efb\u52a1\u53d1\u9001\u5230\u5f53\u524d\u804a\u5929\u3002'], 'err');
+    return;
+  }
+  if (getActiveSessionRuntime()?.busy) {
+    setObsidianState('\u5f53\u524d\u804a\u5929\u8fd8\u5728\u8fd0\u884c\uff0c\u8bf7\u7a0d\u540e\u518d\u53d1\u9001\u3002', 'err');
+    setObsidianFeedback('\u804a\u5929\u6b63\u5728\u5fd9', ['\u7b49\u5f53\u524d\u56de\u590d\u5b8c\u6210\uff0c\u6216\u5148\u505c\u6b62\u5f53\u524d\u4efb\u52a1\u3002'], 'err');
+    return;
+  }
+  const sess = state.sessions.get(state.activeId);
+  const runtime = sess ? getSessionRuntime(sess) : null;
+  if (runtime) runtime.obsidianWritingTask = { reviewId: prepared.review_id || '', startedAt: Date.now() };
+  obsidianUi.writing = true;
+  setObsidianBusy(true);
+  setObsidianState('\u6b63\u5728\u5199\u590d\u76d8\uff0c\u8bf7\u7a0d\u7b49...', 'busy');
+  setObsidianFeedback('\u6b63\u5728\u751f\u6210\u590d\u76d8', [
+    '\u6211\u5df2\u5f00\u59cb\u6839\u636e\u6574\u7406\u597d\u7684\u7d20\u6750\u5199\u590d\u76d8\u3002',
+    '\u5185\u90e8\u6574\u7406\u6307\u4ee4\u4f1a\u5728\u540e\u53f0\u53d1\u9001\uff0c\u4e0d\u4f1a\u663e\u793a\u5728\u53f3\u4fa7\u5bf9\u8bdd\u91cc\u3002',
+  ], 'busy');
+  const sent = await sendPrompt(prepared.prompt, [], {
+    hideUserMessage: true,
+    title: '\u590d\u76d8\u5199\u4f5c',
+    busyLabel: '\u6b63\u5728\u5199\u590d\u76d8...'
+  });
+  if (!sent?.ok) {
+    if (runtime) runtime.obsidianWritingTask = null;
+    obsidianUi.writing = false;
+    setObsidianBusy(false);
+    setObsidianState('\u590d\u76d8\u751f\u6210\u6ca1\u6709\u5f00\u59cb\u3002', 'err');
+    setObsidianFeedback('\u53d1\u9001\u5931\u8d25', ['\u8bf7\u68c0\u67e5 bridge \u662f\u5426\u6b63\u5e38\u8fd0\u884c\uff0c\u7136\u540e\u518d\u8bd5\u4e00\u6b21\u3002'], 'err');
+  }
+}
+
+async function openObsidianPath(pathValue) {
+  const path = String(pathValue || '').trim();
+  if (!path) return;
+  try {
+    const result = await window.ga.openPath(path);
+    if (result && result.ok === false) showError(result.error || `\u65e0\u6cd5\u6253\u5f00 ${path}`);
+  } catch (err) {
+    showError('\u6253\u5f00\u8def\u5f84\u5931\u8d25\uff1a' + (err.message || err));
   }
 }
 
@@ -1959,6 +2360,19 @@ sendBtn.addEventListener('click', () => {
 // ─── Buttons ─────────────────────────────────────────────────────────────
 $('new-session-btn').addEventListener('click', newSession);
 $('settings-btn').addEventListener('click', openSettings);
+$('obsidian-btn').addEventListener('click', openObsidianPanel);
+$('close-obsidian').addEventListener('click', closeObsidianPanel);
+$('obsidian-status').addEventListener('click', () => runObsidianAction('status', { includePeriod: false }));
+$('obsidian-first-run').addEventListener('click', () => runObsidianAction('init-profile', { includePeriod: false }));
+$('obsidian-init-profile').addEventListener('click', () => runObsidianAction('init-profile', { includePeriod: false }));
+$('obsidian-confirm-profile').addEventListener('click', () => runObsidianAction('confirm-profile', { includePeriod: false }));
+$('obsidian-prepare').addEventListener('click', () => runObsidianAction('prepare'));
+$('obsidian-send').addEventListener('click', sendPreparedObsidianPrompt);
+obsidianPeriodEl?.addEventListener('change', updateObsidianDateMode);
+obsidianFilesEl?.addEventListener('click', (e) => {
+  const btn = e.target.closest('.obsidian-open');
+  if (btn) openObsidianPath(btn.dataset.path);
+});
 $('close-settings').addEventListener('click', closeSettings);
 $('cancel-settings').addEventListener('click', closeSettings);
 $('save-settings').addEventListener('click', saveSettings);
@@ -2112,7 +2526,9 @@ settingsModal.querySelector('.modal-backdrop').addEventListener('click', closeSe
     showError('Failed to load settings; using defaults: ' + (err.message || err));
   }
   applyTheme();
+  if (obsidianVaultEl) obsidianVaultEl.value = localStorage.getItem('ga.obsidian.vault') || '';
+  updateObsidianDateMode();
   await loadModelProfiles();
   updateSendButton();
-  inputEl.focus();
+  if (obsidianVaultEl && !obsidianVaultEl.value) obsidianVaultEl.focus();
 })();

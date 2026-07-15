@@ -38,23 +38,30 @@
 
       <section id="messages" class="empty">
         <div class="empty-state">
-          <div class="empty-title">New task</div>
-          <div class="empty-sub">Task me anything. Type <code>/help</code> for commands.</div>
+          <div class="empty-title">辅助对话</div>
+          <div class="empty-sub">这里会显示复盘生成过程，也可以继续补充要求。</div>
         </div>
       </section>
 
       <div id="composer-wrap">
         <div id="composer">
           <div id="image-previews" class="image-previews"></div>
-          <textarea id="input" rows="1" placeholder="Type a message, or /help"></textarea>
+          <textarea id="input" rows="1" placeholder="补充你的复盘要求，或直接提问"></textarea>
           <div class="composer-bottom">
             <div class="composer-hints">
-              <button id="settings-btn" class="icon-btn ghost" title="Settings" aria-label="Settings">
+              <button id="settings-btn" class="icon-btn ghost" title="设置" aria-label="设置">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="3"/>
                   <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
                 </svg>
-                <span class="hint-label">Settings</span>
+                <span class="hint-label">设置</span>
+              </button>
+              <button id="obsidian-btn" class="icon-btn ghost" title="Obsidian 复盘" aria-label="Obsidian 复盘">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 1 4 16.5z"/>
+                  <path d="M8 7h8M8 11h8M8 15h5"/>
+                </svg>
+                <span class="hint-label">复盘</span>
               </button>
 
             </div>
@@ -67,6 +74,73 @@
         </div>
       </div>
     </main>
+
+    <aside id="obsidian-panel" class="obsidian-panel" aria-label="Obsidian 复盘工作台">
+      <div class="obsidian-head">
+        <div>
+          <h2>Obsidian 复盘</h2>
+          <p id="obsidian-subtitle">把你的笔记变化整理成一篇可读的复盘</p>
+        </div>
+        <button class="icon-btn ghost" id="close-obsidian" title="关闭" aria-label="关闭 Obsidian 复盘">x</button>
+      </div>
+      <div class="obsidian-body">
+        <section class="obsidian-guide" aria-label="第一次使用引导">
+          <div class="obsidian-guide-copy">
+            <strong>第一次使用，先让我熟悉你的笔记库</strong>
+            <span>我会先看看你的目录结构和复盘偏好。你可以在 Obsidian 里检查和修改这份说明。</span>
+          </div>
+          <button class="btn primary" id="obsidian-first-run">第一次使用：开始熟悉我的笔记库</button>
+        </section>
+
+        <div class="obsidian-steps" aria-label="复盘步骤">
+          <div class="obsidian-step" data-step="1"><strong>选择笔记库</strong><span>粘贴 Obsidian 笔记库的本地路径。</span></div>
+          <div class="obsidian-step" data-step="2"><strong>检查说明</strong><span>在 Obsidian 里看一眼我整理的说明。</span></div>
+          <div class="obsidian-step" data-step="3"><strong>整理素材</strong><span>选择时间范围，找出这段时间的变化。</span></div>
+          <div class="obsidian-step" data-step="4"><strong>生成复盘</strong><span>交给当前聊天写成报告。</span></div>
+        </div>
+
+        <div class="form-row">
+          <label for="obsidian-vault">笔记库路径</label>
+          <div class="input-row">
+            <input id="obsidian-vault" type="text" placeholder="例如 D:\download\Obsidian\Jasmine">
+            <button class="btn" id="obsidian-status">检查</button>
+          </div>
+          <small>这个路径只会在你的电脑上使用，下次打开时会自动记住。</small>
+        </div>
+        <div class="obsidian-grid two">
+          <div class="form-row">
+            <label for="obsidian-period">时间范围</label>
+            <select id="obsidian-period">
+              <option value="this-week">本周</option>
+              <option value="today">今天</option>
+              <option value="last-week">上周</option>
+              <option value="this-month">本月</option>
+              <option value="custom">自定义日期</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label for="obsidian-from">开始日期</label>
+            <input id="obsidian-from" type="date">
+          </div>
+          <div class="form-row">
+            <label for="obsidian-to">结束日期</label>
+            <input id="obsidian-to" type="date">
+          </div>
+        </div>
+        <div class="obsidian-actions">
+          <button class="btn" id="obsidian-init-profile">重新整理笔记库信息</button>
+          <button class="btn" id="obsidian-confirm-profile">我已检查，开始使用</button>
+          <button class="btn primary" id="obsidian-prepare">整理复盘素材</button>
+          <button class="btn" id="obsidian-send" disabled>开始写复盘</button>
+        </div>
+        <div id="obsidian-state" class="obsidian-state idle">等待操作：第一次使用请先填写笔记库路径，然后点击“第一次使用：开始熟悉我的笔记库”。</div>
+        <div id="obsidian-feedback" class="obsidian-feedback hidden"></div>
+        <div id="obsidian-metrics" class="obsidian-metrics hidden"></div>
+        <div id="obsidian-files" class="obsidian-files hidden"></div>
+        <div class="obsidian-log-title">详细记录</div>
+        <pre id="obsidian-log" class="obsidian-log">还没有运行记录。</pre>
+      </div>
+    </aside>
 
     <!-- Settings modal -->
     <div id="settings-modal" class="modal hidden">
@@ -111,6 +185,6 @@
 
   <script src="vendor/marked.min.js"></script>
   <script src="ga-web.js?v=14168-2"></script>
-  <script src="app.js?v=poll-fold-7"></script>
+  <script src="app.js?v=obsidian-workspace-1"></script>
 </body>
 </html>

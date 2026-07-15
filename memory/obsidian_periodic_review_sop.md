@@ -6,7 +6,7 @@
 
 - `/obsidian-review this-week --vault <Vault路径>`
 - `/obsidian-review today --vault <Vault路径>`
-- `/obsidian-review --from YYYY-MM-DD --vault <Vault路径>`
+- `/obsidian-review --from YYYY-MM-DD --to YYYY-MM-DD --vault <Vault路径>`
 
 ## 前置
 
@@ -31,11 +31,10 @@ Reviews/_AgentProfile/vault_profile.draft.md
 
 ## 写作规则
 
-- profile draft 用户确认区是文件夹用途、长期目标、活跃主线的最高优先级上下文。
-- `infer_topic_hint()` 只能当低置信新主题候选，不能覆盖用户确认区。
-- 报告先说明本周期新增/修改了哪些文件，再按用户已确认的主题串联成逻辑线。
-- 每个有修改的主题至少总结一条逻辑线：涉及哪些文件、共同说明什么进展、阻塞/下一步是什么。
-- 不要把 changed blocks 当作“本周发生了什么”的唯一信号；它只用于引用具体来源。
-- 不要逐条搬运 block，也不要写成 `[[来源]]: 原文片段` 清单。
-- source_link 已经是 Obsidian 双链，原样使用，不要再包一层 `[[...]]`。
+- `vault_profile.draft.md` 用户确认区是文件夹用途、长期目标、活跃主线和复盘偏好的最高优先级上下文。
+- 报告是给用户看的复盘文章，不要写成程序运行日志，也不要解释 baseline、diff、evidence package、changed blocks 等内部机制。
+- 请根据用户文件夹意图，帮助用户更好地使用这个文件夹中的内容；不要套固定分类模板。
+- 少样本启发：像论文笔记时可串联问题、方法差异和复习顺序；像网页剪藏或待读池时可筛选值得细读的材料并说明它们可能解决的问题；像项目记录时可提炼实验、实现、错误验证、想法和下一步。这些只是示例，遇到其他用途要自行泛化判断。
+- 所有内容都要总结提炼成洞察、关系、取舍、复习线索和行动建议，不要逐文件复述已有内容。
+- source_link 已经是 Obsidian 双链，原样使用；只保留少量最关键的回看入口，不要写成来源清单或原文摘抄列表。
 - 新发现的文件夹用途、长期目标、活跃主线可以自动追加到 `vault_profile.draft.md` 的 Agent 候选区，但不能改用户确认区。
