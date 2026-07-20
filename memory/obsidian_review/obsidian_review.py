@@ -42,6 +42,81 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "preferred_topics": [],
 }
 
+SOP_LEARNING_MIN_USES = 2
+
+WORKFLOW_SOP_TEMPLATES: dict[str, dict[str, Any]] = {
+    "paper_synthesis": {
+        "title": "论文串联复盘 SOP",
+        "activity": "paper_reading",
+        "summary": "用于论文笔记、文献阅读和方法对比类内容。",
+        "do": [
+            "先找共同问题和研究脉络，再比较方法差异。",
+            "把多篇论文合成问题-方法-结论-局限的关系网。",
+            "只保留少量最值得回看的 Obsidian 链接。",
+            "给出下一步阅读顺序或需要补的背景知识。",
+        ],
+        "avoid": "不要逐篇复述摘要，也不要把来源链接写成清单。",
+    },
+    "project_review": {
+        "title": "项目梳理复盘 SOP",
+        "activity": "project_planning",
+        "summary": "用于项目记录、方案设计、实现推进和阶段复盘。",
+        "do": [
+            "按目标、当前进展、关键决策、卡点和下一步组织。",
+            "区分已经验证的事实、仍待验证的假设和需要用户决策的问题。",
+            "把零散记录合并到项目主线，不按文件逐段复述。",
+            "优先指出能推动下一轮工作的最小行动。",
+        ],
+        "avoid": "不要把项目记录写成流水账，也不要替用户确认长期主线。",
+    },
+    "experiment_review": {
+        "title": "实验复盘 SOP",
+        "activity": "experiment_log",
+        "summary": "用于实验日志、指标结果、消融对比和错误分析。",
+        "do": [
+            "先整理实验目的、变量、结果和异常。",
+            "明确哪些结论已由结果支持，哪些还只是猜测。",
+            "把失败实验转化为下一轮排查线索。",
+            "突出可复现设置、关键指标和后续实验优先级。",
+        ],
+        "avoid": "不要只罗列指标，也不要把未验证猜测写成结论。",
+    },
+    "daily_reflection": {
+        "title": "日常状态复盘 SOP",
+        "activity": "daily_log",
+        "summary": "用于日记、日报、情绪和周期性状态记录。",
+        "do": [
+            "提炼状态变化、触发因素、恢复方式和反复出现的模式。",
+            "把情绪、精力和行动放在同一条时间线上理解。",
+            "输出温和具体的下周调整建议。",
+            "避免过度诊断，只总结用户记录中可见的信号。",
+        ],
+        "avoid": "不要给医疗化判断，也不要暴露原始私密内容。",
+    },
+    "reading_queue_triage": {
+        "title": "待读资料筛选 SOP",
+        "activity": "reading_note",
+        "summary": "用于网页剪藏、待读材料池和泛阅读笔记。",
+        "do": [
+            "先判断每条材料可能解决的问题，而不是只概括标题。",
+            "按值得深读、可快速扫过、暂时搁置分层。",
+            "把资料和当前长期主线或项目需求连接起来。",
+            "给出少量下一步阅读入口。",
+        ],
+        "avoid": "不要把剪藏当成已经完成的学习成果。",
+    },
+    "interview_review": {
+        "title": "面试准备复盘 SOP",
+        "activity": "interview_review",
+        "summary": "用于面试题、表达打磨、八股整理和面试复盘。",
+        "do": [
+            "按知识漏洞、表达结构、例子素材和下一轮练习组织。",
+            "把题目整理成可复用的回答框架。",
+            "标出高频薄弱点和最小补强动作。",
+        ],
+        "avoid": "不要只堆题目清单，也不要忽略表达练习。",
+    },
+}
 PERIOD_CHOICES = ("today", "this-week", "last-week", "this-month")
 BLOCK_ID_RE = re.compile(r"(?:^|\s)\^([A-Za-z0-9_-]+)\s*$")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -343,6 +418,7 @@ def cmd_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "writing_guidelines": writing_guidelines(run_mode),
     }
     digest_payload = build_review_digest(payload)
+    attach_workflow_sop_context(digest_payload, memory_dir, vault)
     profile_update_payload = build_profile_update_suggestions(digest_payload, confirmed_profile, run_at)
     state_update_payload = {
         "schema_version": SCHEMA_VERSION,
@@ -530,6 +606,8 @@ def cmd_finalize(args: argparse.Namespace) -> dict[str, Any]:
         "date_end": changed_meta.get("date_end"),
         "changed_blocks": changed_meta.get("changed_blocks_count", 0),
     }
+    finalized_at = datetime.now(get_timezone(config.get("timezone", "Asia/Shanghai")))
+    sop_learning = update_sop_learning(memory_dir, digest_payload, report_path, review_id, finalized_at, vault)
     history_record = {
         "id": review_id,
         "schema_version": SCHEMA_VERSION,
@@ -543,7 +621,8 @@ def cmd_finalize(args: argparse.Namespace) -> dict[str, Any]:
         "changed_blocks": changed_meta.get("changed_blocks_count", 0),
         "mainlines_touched": touched_mainlines,
         "created_pending_updates": [record["proposal_id"] for record in proposal_records],
-        "finalized_at": datetime.now(get_timezone(config.get("timezone", "Asia/Shanghai"))).isoformat(),
+        "sop_learning": sop_learning,
+        "finalized_at": finalized_at.isoformat(),
     }
     appended_review_ids = append_jsonl_once(review_history_path, [history_record], "review_id")
 
@@ -563,6 +642,7 @@ def cmd_finalize(args: argparse.Namespace) -> dict[str, Any]:
         "profile_draft_candidates_added": draft_candidates_added,
         "review_history_appended": bool(appended_review_ids),
         "mainlines_touched": touched_mainlines,
+        "sop_learning": sop_learning,
     }
     atomic_write_json(marker_path, marker)
     return marker
@@ -597,7 +677,6 @@ ALLOWED_PROPOSAL_KINDS = {
     "mainline_gap",
     "mainline_next_step",
     "new_mainline_candidate",
-    "workflow_preference_candidate",
 }
 
 
@@ -2935,8 +3014,8 @@ def build_review_digest(changed_payload: dict[str, Any]) -> dict[str, Any]:
         "topic_summaries": sorted(topic_summaries.values(), key=lambda x: (-len(x.get("key_points", [])), x["topic"])),
         "vault_profile_context": compact_vault_profile(vault_profile),
         "profile_update_policy": (
-            "Folder roles, long-term goals, and active mainlines from vault_profile.draft.md 用户确认区 must not be overwritten. "
-            "Write new evidence only as suggestions in vault_profile_update.latest.json and Agent 候选区."
+            "Folder roles and active mainlines from vault_profile.draft.md 用户确认区 must not be overwritten. "
+            "Write new folder/mainline evidence only as suggestions in vault_profile_update.latest.json and Agent 候选区; SOPs are learned automatically after finalize."
         ),
         "file_summaries": file_summaries[:80],
         "open_items": collect_points(file_summaries, "todos", 30),
@@ -3001,6 +3080,289 @@ def extract_profile_entry_label(entry: Any) -> str:
     return str(entry or "").strip()
 
 
+
+def attach_workflow_sop_context(digest_payload: dict[str, Any], memory_dir: Path, vault: Path) -> dict[str, Any]:
+    registry = load_sop_registry(memory_dir)
+    observations = infer_workflow_observations(digest_payload.get("file_summaries", []))
+    matched_sops = match_active_sops(observations, registry, memory_dir, vault)
+    digest_payload["workflow_sop_context"] = {
+        "policy": (
+            "SOPs are agent-owned execution experience. User confirmation is only required for folder roles "
+            "and long-term mainlines in vault_profile.draft.md. Read matched_sops before writing; do not ask the user to confirm SOPs."
+        ),
+        "registry_file": rel_to_vault(memory_dir / "sop_registry.json", vault),
+        "matched_sops": matched_sops,
+        "observed_workflows": observations[:12],
+    }
+    digest_payload.setdefault("meta", {})["matched_sop_count"] = len(matched_sops)
+    return digest_payload
+
+
+def load_sop_registry(memory_dir: Path) -> dict[str, Any]:
+    path = memory_dir / "sop_registry.json"
+    if not path.exists():
+        return empty_sop_registry()
+    data = load_json(path, default={})
+    if not isinstance(data, dict):
+        return empty_sop_registry()
+    workflows = data.get("workflows")
+    if not isinstance(workflows, dict):
+        data["workflows"] = {}
+    data.setdefault("schema_version", SCHEMA_VERSION)
+    data.setdefault("policy", "agent_owned_sops_do_not_require_user_confirmation")
+    return data
+
+
+def empty_sop_registry() -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "policy": "agent_owned_sops_do_not_require_user_confirmation",
+        "promotion_threshold": SOP_LEARNING_MIN_USES,
+        "workflows": {},
+    }
+
+
+def infer_workflow_observations(file_summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in file_summaries or []:
+        workflow_id = infer_file_workflow(item)
+        if not workflow_id:
+            continue
+        template = WORKFLOW_SOP_TEMPLATES.get(workflow_id, {})
+        record = grouped.setdefault(
+            workflow_id,
+            {
+                "workflow_id": workflow_id,
+                "title": template.get("title", workflow_id),
+                "file_count": 0,
+                "files": [],
+                "sources": [],
+                "activity_counts": {},
+                "scopes": [],
+                "reason": template.get("summary", ""),
+            },
+        )
+        record["file_count"] += 1
+        append_limited(record["files"], item.get("file"), 12)
+        scope = workflow_scope_for_file(item)
+        if scope:
+            append_limited(record["scopes"], scope, 8)
+        for source in item.get("source_links", [])[:4]:
+            append_limited(record["sources"], source, 16)
+        for key, value in workflow_activity_counts(item).items():
+            record["activity_counts"][key] = record["activity_counts"].get(key, 0) + value
+    observations = list(grouped.values())
+    observations.sort(key=lambda item: (-item.get("file_count", 0), item.get("workflow_id", "")))
+    return observations
+
+
+def infer_file_workflow(file_summary: dict[str, Any]) -> str:
+    activities = workflow_activity_counts(file_summary)
+    corpus = workflow_signal_corpus(file_summary).lower()
+    if activities.get("paper_reading", 0) >= 2 or any(k in corpus for k in ("paper", "arxiv", "论文", "文献")):
+        return "paper_synthesis"
+    if activities.get("experiment_log", 0) >= 2 or any(k in corpus for k in ("experiment", "ablation", "指标", "实验", "结果")):
+        return "experiment_review"
+    if activities.get("interview_review", 0) >= 2 or any(k in corpus for k in ("interview", "面试", "八股")):
+        return "interview_review"
+    if activities.get("project_planning", 0) >= 2 or any(k in corpus for k in ("project", "roadmap", "项目", "方案", "设计")):
+        return "project_review"
+    if activities.get("daily_log", 0) >= 2 or any(k in corpus for k in ("daily", "diary", "journal", "日记", "日报", "情绪", "心情")):
+        return "daily_reflection"
+    if activities.get("reading_note", 0) >= 2 or any(k in corpus for k in ("clippings", "剪藏", "待读", "阅读", "摘录")):
+        return "reading_queue_triage"
+    return ""
+
+
+def workflow_activity_counts(file_summary: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for source_key in ("activities", "changed_block_activities"):
+        source = file_summary.get(source_key, {})
+        if not isinstance(source, dict):
+            continue
+        for key, value in source.items():
+            try:
+                counts[str(key)] = counts.get(str(key), 0) + int(value)
+            except (TypeError, ValueError):
+                continue
+    return counts
+
+
+def workflow_signal_corpus(file_summary: dict[str, Any]) -> str:
+    chunks = [
+        str(file_summary.get("file", "")),
+        str(file_summary.get("top_dir", "")),
+        "/".join(str(part) for part in file_summary.get("parent_dirs", []) or []),
+        str(file_summary.get("topic_hint", "")),
+    ]
+    profile_hint = file_summary.get("profile_hint")
+    if isinstance(profile_hint, dict):
+        chunks.extend(str(profile_hint.get(key, "")) for key in ("topic", "matched_folder"))
+    for point in file_summary.get("representative_points", [])[:4]:
+        if isinstance(point, dict):
+            chunks.append(str(point.get("text", "")))
+    return "\n".join(chunks)
+
+
+def workflow_scope_for_file(file_summary: dict[str, Any]) -> str:
+    profile_hint = file_summary.get("profile_hint")
+    if isinstance(profile_hint, dict):
+        folder = str(profile_hint.get("matched_folder") or "").strip()
+        if folder:
+            return folder
+    parent_dirs = file_summary.get("parent_dirs") or []
+    if parent_dirs:
+        return "/".join(str(part) for part in parent_dirs)
+    return str(file_summary.get("top_dir") or "").strip()
+
+
+def match_active_sops(
+    observations: list[dict[str, Any]],
+    registry: dict[str, Any],
+    memory_dir: Path,
+    vault: Path,
+) -> list[dict[str, Any]]:
+    workflows = registry.get("workflows", {}) if isinstance(registry, dict) else {}
+    if not isinstance(workflows, dict):
+        return []
+    matches: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for observation in observations:
+        workflow_id = str(observation.get("workflow_id") or "")
+        record = workflows.get(workflow_id)
+        if not isinstance(record, dict) or record.get("status") != "active":
+            continue
+        sop_path = str(record.get("sop_path") or "").strip()
+        if not sop_path or sop_path in seen:
+            continue
+        full_path = (memory_dir / sop_path).resolve() if not Path(sop_path).is_absolute() else Path(sop_path).resolve()
+        if not full_path.exists():
+            continue
+        seen.add(sop_path)
+        matches.append(
+            {
+                "workflow_id": workflow_id,
+                "title": record.get("title") or observation.get("title") or workflow_id,
+                "sop_path": rel_to_vault(full_path, vault),
+                "use_count": record.get("use_count", 0),
+                "matched_files": observation.get("files", [])[:8],
+                "scopes": observation.get("scopes", [])[:6],
+                "reason": observation.get("reason", ""),
+            }
+        )
+    return matches
+
+
+def update_sop_learning(
+    memory_dir: Path,
+    digest_payload: dict[str, Any],
+    report_path: Path,
+    review_id: str,
+    run_at: datetime,
+    vault: Path,
+) -> dict[str, Any]:
+    registry = load_sop_registry(memory_dir)
+    workflows = registry.setdefault("workflows", {})
+    observations = infer_workflow_observations(digest_payload.get("file_summaries", []))
+    promoted: list[dict[str, Any]] = []
+    updated: list[str] = []
+    for observation in observations:
+        workflow_id = str(observation.get("workflow_id") or "").strip()
+        if workflow_id not in WORKFLOW_SOP_TEMPLATES:
+            continue
+        template = WORKFLOW_SOP_TEMPLATES[workflow_id]
+        record = workflows.setdefault(
+            workflow_id,
+            {
+                "workflow_id": workflow_id,
+                "title": template.get("title", workflow_id),
+                "status": "observing",
+                "use_count": 0,
+                "first_seen": run_at.isoformat(),
+                "last_seen": "",
+                "sop_path": "",
+                "scopes": [],
+                "evidence": [],
+            },
+        )
+        if any(item.get("review_id") == review_id for item in record.get("evidence", []) if isinstance(item, dict)):
+            continue
+        record["title"] = template.get("title", workflow_id)
+        record["use_count"] = int(record.get("use_count") or 0) + 1
+        record["last_seen"] = run_at.isoformat()
+        record.setdefault("first_seen", run_at.isoformat())
+        for scope in observation.get("scopes", [])[:8]:
+            append_limited(record.setdefault("scopes", []), scope, 20)
+        evidence = {
+            "review_id": review_id,
+            "report": rel_to_vault(report_path, vault),
+            "files": observation.get("files", [])[:8],
+            "sources": observation.get("sources", [])[:8],
+            "observed_at": run_at.isoformat(),
+        }
+        record.setdefault("evidence", []).append(evidence)
+        record["evidence"] = record.get("evidence", [])[-10:]
+        updated.append(workflow_id)
+        if int(record.get("use_count") or 0) >= SOP_LEARNING_MIN_USES:
+            record["status"] = "active"
+            sop_rel = record.get("sop_path") or f"sops/{workflow_id}.md"
+            record["sop_path"] = sop_rel
+            sop_path = memory_dir / sop_rel
+            if not sop_path.exists():
+                atomic_write_text(sop_path, render_workflow_sop(workflow_id, record, template, run_at))
+                promoted.append({"workflow_id": workflow_id, "sop_path": rel_to_vault(sop_path, vault)})
+    registry["updated_at"] = run_at.isoformat()
+    atomic_write_json(memory_dir / "sop_registry.json", registry)
+    return {
+        "observed_workflows": [item.get("workflow_id") for item in observations],
+        "updated_workflows": updated,
+        "promoted_sops": promoted,
+        "registry": rel_to_vault(memory_dir / "sop_registry.json", vault),
+    }
+
+
+def render_workflow_sop(workflow_id: str, record: dict[str, Any], template: dict[str, Any], run_at: datetime) -> str:
+    lines = [
+        f"# {template.get('title', workflow_id)}",
+        "",
+        "来源：Agent 在真实 Obsidian 复盘任务中自动沉淀的工作经验；不属于用户确认事实。",
+        f"生成时间：{run_at.isoformat()}",
+        f"触发次数：{record.get('use_count', 0)}",
+        "",
+        "## 适用",
+        "",
+        str(template.get("summary", "")),
+        "",
+        "## 执行要点",
+        "",
+    ]
+    for item in template.get("do", []) or []:
+        lines.append(f"- {item}")
+    lines += [
+        "",
+        "## 避免",
+        "",
+        f"- {template.get('avoid', '不要机械套模板；证据不足时回到 review_digest 查证。')}",
+        "",
+        "## 触发线索",
+        "",
+    ]
+    scopes = record.get("scopes", []) or []
+    if scopes:
+        for scope in scopes[:10]:
+            lines.append(f"- `{scope}`")
+    else:
+        lines.append(f"- candidate_activity: `{template.get('activity', workflow_id)}`")
+    lines += [
+        "",
+        "## 更新规则",
+        "",
+        "- 只在成功 finalize 后根据真实复盘经验修正。",
+        "- 这里写 agent 的处理方法，不写文件夹用途、长期主线或用户事实。",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def compact_vault_profile(profile: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(profile, dict) or not profile:
         return {}
@@ -3029,6 +3391,7 @@ def write_runtime_l1_context(
     draft_rel = config.get("profile_draft_dir", "Reviews/_AgentProfile") + "/vault_profile.draft.md"
     mainlines = profile.get("active_mainlines", []) if isinstance(profile, dict) else []
     prefs = profile.get("review_preferences", []) if isinstance(profile, dict) else []
+    sop_registry = load_sop_registry(memory_dir)
 
     lines = [
         "# Review Agent L1",
@@ -3037,6 +3400,7 @@ def write_runtime_l1_context(
         f"ProfileDraft: {draft_rel}",
         "VaultProfileCache: .obsidian-review-agent/vault_profile.confirmed.json",
         "Mainlines: .obsidian-review-agent/memory/mainlines_registry.json",
+        "SOPRegistry: .obsidian-review-agent/memory/sop_registry.json",
         "SOPs: .obsidian-review-agent/memory/sops/*.md",
         "Pending: .obsidian-review-agent/memory/profile_updates.pending.jsonl",
         "History: .obsidian-review-agent/memory/profile_updates.history.jsonl",
@@ -3045,8 +3409,9 @@ def write_runtime_l1_context(
         "RULES:",
         "- ProfileDraft 用户确认区才是最高优先级事实；Agent 候选区只是弱信号。",
         "- 候选决策以 proposal_id + status 为准：confirmed/rejected/pending；删除不等于拒绝。",
-        "- 新主线/文件夹用途/用户偏好/长期目标只能追加到 Agent 候选区，不能自动改用户确认区。",
-        "- 周复盘先读 review_digest.latest.json；证据不清时再查 changed_blocks.latest.json。",
+        "- 新主线/文件夹用途/长期主线只能追加到 Agent 候选区，不能自动改用户确认区。",
+        "- SOP 是 Agent 自有工作经验，成功 finalize 后自动沉淀；用户不需要确认 SOP。",
+        "- 周复盘先读 review_digest.latest.json；若 workflow_sop_context.matched_sops 非空，再读对应 SOP。",
         "",
         "活跃主线:",
     ]
@@ -3070,6 +3435,16 @@ def write_runtime_l1_context(
             "- 按长期主线组织",
             "- 避免逐条 block 罗列",
         ]
+    active_sops = [
+        record for record in (sop_registry.get("workflows", {}) or {}).values()
+        if isinstance(record, dict) and record.get("status") == "active" and record.get("sop_path")
+    ]
+    lines += ["", "已激活 SOP:"]
+    if active_sops:
+        for record in sorted(active_sops, key=lambda item: str(item.get("workflow_id", "")))[:20]:
+            lines.append(f"- {record.get('workflow_id')}: .obsidian-review-agent/memory/{record.get('sop_path')}")
+    else:
+        lines.append("- 暂无；SOP 会在真实复盘多次成功后自动生成")
     atomic_write_text(path, "\n".join(lines) + "\n")
     return path
 

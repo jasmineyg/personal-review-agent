@@ -408,12 +408,12 @@ prepare 已经完成；不要重新运行 prepare。你只负责基于本轮 evi
 必须按顺序执行：
 
 1. 读取 `{SOP_PATH}`，确认写作方向。
-2. 读取 `{review_digest_file}` 作为主要写作输入；它是本轮 run-scoped digest。
+2. 读取 `{review_digest_file}` 作为主要写作输入；它是本轮 run-scoped digest。如果其中 `workflow_sop_context.matched_sops` 非空，逐个读取对应 `sop_path` 后再写报告；为空时不要编造 SOP。
 3. 只有证据不清时才读取 `{changed_blocks_file}` 查证细节；不要直接扫描整个 Vault。
 4. 生成 Markdown 复盘报告并写入：`{suggested_report}`
 5. 写入 run-scoped 状态文件 `{state_update_file}`，必须包含 `review_id: "{review_id}"`，并至少包含 `open_items`、`blockers`、`active_topics`。
 6. 写入 run-scoped memory proposals 文件 `{memory_proposals_file}`。没有候选时也要写空数组：`{{"schema_version": 1, "review_id": "{review_id}", "proposals": []}}`
-7. memory proposals 最多 5 条；每条最多 180 中文字符；只保存路径或 Obsidian link 作为 evidence，不保存原文。允许的 kind 只有 `mainline_progress`、`mainline_gap`、`mainline_next_step`、`new_mainline_candidate`、`workflow_preference_candidate`。
+7. memory proposals 最多 5 条；每条最多 180 中文字符；只保存路径或 Obsidian link 作为 evidence，不保存原文。允许的 kind 只有 `mainline_progress`、`mainline_gap`、`mainline_next_step`、`new_mainline_candidate`。不要把 SOP、复盘方法或工作流偏好写入 memory proposals；SOP 会在 finalize 后自动沉淀。
 8. prepare 已经把自动候选写入 `{profile_update_file}`；如有可展示的新增候选，也可能已追加到 `{profile_draft}`。本次自动追加候选数：{draft_candidates_added}。不要改写 profile draft 的用户确认区。
 9. 报告、状态文件、memory proposals 都写成功后，用 `code_run` 运行下面这段 Python 完成 finalize；不要把 shell 命令直接填进 `code_run` 脚本里。
 
@@ -424,7 +424,7 @@ prepare 已经完成；不要重新运行 prepare。你只负责基于本轮 evi
 写作方向：
 - 报告是给用户看的复盘文章，不是程序运行日志。不要在报告中出现 `review_id`、`run_dir`、`changed_blocks`、`review_digest`、`file_summaries`、`finalize`、`latest`、`first_baseline` 等工程词。
 - 标题和文件名都要自然可读，例如 `2026-07-07 至 2026-07-13 复盘`；不要把 hash 或内部编号写进用户可见内容。
-- `vault_profile.draft.md` 用户确认区是文件夹用途、长期目标、活跃主线的最高优先级上下文。
+- `vault_profile.draft.md` 用户确认区是文件夹用途和长期主线的最高优先级上下文；SOP 是 Agent 自己的工作经验，不需要用户确认。
 - 请根据用户文件夹意图，帮助用户更好地使用这个文件夹中的内容；不要套固定分类模板，也不要把下面的示例当成规则。
 - 少样本启发：如果内容像论文笔记，可以帮用户串联问题、方法差异和复习顺序；如果像网页剪藏或待读资料池，可以筛出值得细读的材料并说明价值；如果像项目记录，可以提炼实验、实现、错误验证、想法和下一步。这些只是示例，遇到其他用途要自行泛化判断。
 - 对用户文档做总结提炼，输出洞察、关系、取舍、复习线索和行动建议；禁止把原有内容换一种说法逐段复述。
