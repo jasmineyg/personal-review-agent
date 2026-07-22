@@ -36,23 +36,6 @@
       "mode": {"type": "string", "enum": ["overwrite", "append", "prepend"], "description": "写入模式覆盖、追加或在开头追加", "default": "overwrite"}}}
   }},
   {"type": "function", "function": {
-    "name": "web_scan",
-    "description": "获取当前页面的简化HTML内容和标签页列表。会移除隐藏/浮动/被遮盖的元素。切换页面后一般应先调用查看",
-    "parameters": {"type": "object", "properties": {
-      "tabs_only": {"type": "boolean", "description": "仅返回标签页列表和当前标签信息，不获取HTML内容"},
-      "switch_tab_id": {"type": "string", "description": "可选的标签页 ID。如果提供，系统将在扫描前切换到该标签页"},
-      "text_only": {"type": "boolean", "description": "只要纯文本不要HTML"}}}
-  }},
-  {"type": "function", "function": {
-    "name": "web_execute_js",
-    "description": "执行JS。支持Multi-call，用不同switch_tab_id并行操作多标签页。禁止猜测，准确操作以减少 web_scan 调用。无script参数时执行正文 ```javascript 块，以免转义",
-    "parameters": {"type": "object", "properties": {
-      "script": {"type": "string", "description": "[Optional] JS代码或路径。为免转义建议留空，改用正文代码块（与此参数互斥）"},
-      "save_to_file": {"type": "string", "description": "结果存文件，适合返回值较长时"},
-      "no_monitor": {"type": "boolean", "description": "跳过页面变更监控，省2-3秒。仅在纯读取信息时设置，页面操作时不要设置"},
-      "switch_tab_id": {"type": "string", "description": "可选的标签页 ID，切换到该标签页执行"}}}
-  }},
-  {"type": "function", "function": {
     "name": "update_working_checkpoint",
     "description": "短期工作便签，每轮自动注入上下文，防长任务信息丢失。前中期调用，非结束时。何时调用：(1)任务开始读SOP后，存用户需求和关键约束/参数（简单1-2步任务除外）；(2)子任务切换或上下文即将被冲刷前；(3)多次重试失败后，重读SOP并必须调用存储新发现；(4)切换新任务时更新内容，清旧进度但保留仍有效的约束。\n\n何时不调用：简单任务（1-2步且无严重约束）、任务已完成时（应当用长期结算工具）",
     "parameters": {"type": "object", "properties": {

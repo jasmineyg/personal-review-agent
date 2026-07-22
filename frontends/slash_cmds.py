@@ -1,7 +1,7 @@
 """Slash-command prompt builders + scheduler-task discovery.
 
 Goal of this module: keep TUI files (tuiapp_v2.py / tui_v3.py) thin. They only
-need to forward `/update`, `/autorun`, `/morphling`, `/goal`, `/hive`
+need to forward `/update`, `/autorun`, `/goal`
 to the corresponding `build_*_prompt(args)` here, and ask
 `list_scheduler_tasks()` / `start_scheduler_task()` for the `/scheduler` picker.
 
@@ -133,8 +133,7 @@ def _tail(args_text: str, label: str = "额外指示") -> str:
 
     User pattern (2026-05-27): the base prompt is a fixed injection that names
     the SOP path; anything the user types after `/cmd ` is appended verbatim so
-    they can add per-invocation hints (e.g. `/morphling https://github.com/...`
-    or `/goal 调研 X，预算 50k token`).
+    they can add per-invocation hints (e.g. `/goal 调研 X，预算 50k token`).
     """
     extra = (args_text or "").strip()
     return f"\n\n{label}: {extra}" if extra else ""
@@ -201,14 +200,6 @@ def build_autorun_prompt(args_text: str = "") -> str:
     )
 
 
-def build_morphling_prompt(args_text: str = "") -> str:
-    return (
-        "请启用 Morphling 模式吞噬 / 蒸馏外部项目到本仓库：先读 "
-        "memory/morphling_sop.md。"
-        "没有目标先 ask_user 取 GitHub 仓库 / 本地路径 / 能力描述。"
-        f"{_tail(args_text, '目标技能/仓库')}"
-    )
-
 
 def build_goal_prompt(args_text: str = "") -> str:
     return (
@@ -217,31 +208,6 @@ def build_goal_prompt(args_text: str = "") -> str:
         f"{_tail(args_text, '用户目标')}"
     )
 
-
-def build_hive_prompt(args_text: str = "") -> str:
-    return (
-        "请进入 Goal Hive 模式（多 worker 协作版 goal）：先读 "
-        "memory/goal_hive_sop.md。"
-        "集群目标 / worker 配额 / 终止条件未明确时先 ask_user 补齐再启动。"
-        f"{_tail(args_text, '集群目标')}"
-    )
-
-
-def build_conductor_prompt(args_text: str = "") -> str:
-    """`/conductor <task>` → run `frontends/conductor.py` on the task.
-
-    Upstream `memory/` ships no conductor SOP, so we deliberately keep the
-    prompt short: name the entrypoint and forward the task verbatim.  The
-    agent is expected to know how to drive `conductor.py` (or consult a
-    local SOP if one happens to be installed).
-    """
-    args_text = (args_text or "").strip()
-    if args_text:
-        return f"请调用 frontends/conductor.py 执行：{args_text}"
-    return (
-        "请调用 frontends/conductor.py，根据后续指令完成多 subagent 编排。"
-        "若任务描述缺失，先 ask_user 一次性补齐。"
-    )
 
 
 def build_obsidian_review_prompt(args_text: str = "") -> str:
@@ -287,7 +253,8 @@ def list_reflect_tasks() -> list[dict]:
 
 # ----- hub.pyw parity: every launchable service ---------------------------
 
-_HUB_EXCLUDES = {"goal_mode.py"}
+_HUB_EXCLUDES = {"goal_mode.py", "agent_team_worker.py"}
+_FRONTEND_EXCLUDES = {"wechatapp.py"}
 
 
 def _sniff_doc(p) -> str:
@@ -312,7 +279,7 @@ def list_launchable_services() -> list[dict]:
     """Mirror hub.pyw's discover_services() so `/scheduler` shows the *same*
     set of launchable services as the GUI launcher.
 
-    Sources (hub.pyw EXCLUDES = goal_mode.py / chatapp_common.py / tuiapp.py):
+    Sources (hidden here: goal_mode.py / agent_team_worker.py / wechatapp.py):
       • reflect/*.py   (not '_'-prefixed, not excluded)
           → cmd = [python, agentmain.py, --reflect, reflect/<f>]
       • frontends/*app*.py (not excluded)
@@ -338,7 +305,7 @@ def list_launchable_services() -> list[dict]:
     fe = _ROOT / "frontends"
     if fe.is_dir():
         for p in sorted(fe.glob("*.py")):
-            if "app" not in p.name or p.name in _HUB_EXCLUDES:
+            if "app" not in p.name or p.name in _FRONTEND_EXCLUDES:
                 continue
             rel = "frontends/" + p.name
             cmd = [sys.executable, rel]
@@ -563,10 +530,7 @@ def start_reflect_task(name: str) -> tuple[bool, str]:
 PALETTE_ENTRIES: list[tuple[str, str, str]] = [
     ("/update",    "[note]",    "git pull 更新 GA 仓库并报告影响面"),
     ("/autorun",   "[seed]",    "进入 autonomous_operation 自主模式"),
-    ("/morphling", "[target]",  "启用 Morphling 蒸馏 / 吞噬外部技能"),
     ("/goal",      "[goal]",    "进入 Goal 模式（需 condition 约束）"),
-    ("/hive",      "[target]",  "进入 Hive 多 worker 协作模式"),
-    ("/conductor", "[task]",    "调用 frontends/conductor.py 多 subagent 编排"),
     ("/obsidian-review", "[init-profile|confirm-profile|period --vault path]", "初始化/确认 Obsidian 环境模型并复盘"),
     ("/scheduler", "",          "多选启动/停止 reflect 任务（cron 由 reflect/scheduler.py 驱动）"),
     ("/resume",    "",           "列出最近会话并恢复其中一个（GA 端展开 prompt）"),
@@ -584,10 +548,7 @@ def prompt_for(cmd: str, args_text: str) -> Optional[str]:
     table = {
         "/update":    build_update_prompt,
         "/autorun":   build_autorun_prompt,
-        "/morphling": build_morphling_prompt,
         "/goal":      build_goal_prompt,
-        "/hive":      build_hive_prompt,
-        "/conductor": build_conductor_prompt,
         "/obsidian-review": build_obsidian_review_prompt,
     }
     fn = table.get(cmd)

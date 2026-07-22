@@ -96,9 +96,6 @@ _TIPS = {
         "Tip: /export clip copies the last reply to your system clipboard; /export all prints the log path.",
         "Tip: Ctrl+O folds / unfolds all completed tool chips — each fold collapses to one line.",
         "Tip: /update auto-runs git pull and audits the impact; /autorun seeds an autonomous run.",
-        "Tip: /morphling <target> absorbs an external skill.",
-        "Tip: /goal <goal> enters Goal mode (will ask for budget / worker cap); /hive <target> for multi-worker.",
-        "Tip: /conductor <task> hands the task to frontends/conductor.py for multi-subagent orchestration.",
         "Tip: /update runs a dual-branch upstream sync — previews the diff before fast-forwarding either side.",
         "Tip: /scheduler is live — untick a running row to stop it; tick again to relaunch.",
         "Tip: Ctrl+S stashes your draft input — it's waiting for you next time you open a picker.",
@@ -118,7 +115,6 @@ _TIPS = {
         "Tip: /new [name] 新建会话；/language 切换界面语言。",
         "Tip: /export clip 把最后回复复制到系统剪贴板；/export all 打印日志路径。",
         "Tip: Ctrl+O 折叠 / 展开所有已完成的工具 chip —— 每个 chip 折叠成一行。",
-        "Tip: /conductor <任务> 直接交给 frontends/conductor.py 做多 subagent 编排。",
         "Tip: /update 是双分支 upstream 同步 —— 先 diff 预演，再分别快进。",
         "Tip: /scheduler 里再点一下已勾选的任务可以 stop —— 取消勾选 = 停止。",
         "Tip: Ctrl+S 把当前输入 stash 起来，下次 / 打开 picker 时还在。",
@@ -152,10 +148,7 @@ _I18N: dict[str, dict[str, str]] = {
         'help.language':        '  /language [code]     View / switch interface language',
         'help.update':          '  /update [note]       Preview upstream commits & diff, then pull (no commit)',
         'help.autorun':         '  /autorun [seed]      Enter autonomous-operation mode',
-        'help.morphling':       '  /morphling [target]  Distill / absorb an external skill',
         'help.goal':            '  /goal [goal]         Enter Goal mode (asks for budget / worker cap)',
-        'help.hive':            '  /hive [target]       Enter Hive multi-worker mode',
-        'help.conductor':       '  /conductor [task]    Hand task to conductor.py for multi-subagent run',
         'help.obsidian_review': '  /obsidian-review [init-profile|confirm-profile|period --vault path]  Initialize/profile Obsidian and write reviews',
         'help.scheduler':       '  /scheduler           Multi-pick reflect tasks / view cron',
         'help.emoji':           '  /emoji [style]       Pick the spinner pet face (picker / direct switch)',
@@ -196,14 +189,8 @@ _I18N: dict[str, dict[str, str]] = {
         'cmd.update.desc':      'preview upstream commits & diff, then pull (no commit)',
         'cmd.autorun.arg':      '[seed]',
         'cmd.autorun.desc':     'enter autonomous operation mode',
-        'cmd.morphling.arg':    '[target]',
-        'cmd.morphling.desc':   'distill / absorb external skills',
         'cmd.goal.arg':         '[goal]',
         'cmd.goal.desc':        'enter Goal mode (needs condition)',
-        'cmd.hive.arg':         '[target]',
-        'cmd.hive.desc':        'enter Hive multi-worker mode',
-        'cmd.conductor.arg':    '[task]',
-        'cmd.conductor.desc':   'hand task to frontends/conductor.py for multi-subagent orchestration',
         'cmd.obsidian_review.arg': '[init-profile|confirm-profile|period --vault path]',
         'cmd.obsidian_review.desc': 'initialize/profile Obsidian and write reviews',
         'cmd.scheduler.desc':   'multi-pick start/stop reflect tasks (cron is driven by reflect/scheduler.py)',
@@ -415,10 +402,7 @@ _I18N: dict[str, dict[str, str]] = {
         'help.language':        '  /language [code]     查看 / 切换界面语言',
         'help.update':          '  /update [备注]       预览 upstream 提交与 diff，再 git pull（不 commit）',
         'help.autorun':         '  /autorun [seed]      进入 autonomous_operation 自主模式',
-        'help.morphling':       '  /morphling [target]  启用 Morphling 蒸馏 / 吞噬外部技能',
         'help.goal':            '  /goal [goal]         进入 Goal 模式（需 condition 约束）',
-        'help.hive':            '  /hive [target]       进入 Hive 多 worker 协作模式',
-        'help.conductor':       '  /conductor [task]    交给 conductor.py 做多 subagent 编排',
         'help.obsidian_review': '  /obsidian-review [init-profile|confirm-profile|周期 --vault 路径]  初始化/确认 Obsidian 环境模型并复盘',
         'help.scheduler':       '  /scheduler           多选启动 reflect 任务 / 查看 cron',
         'help.emoji':           '  /emoji [style]       切换 spinner 宠物样式（picker / 直接传参）',
@@ -459,14 +443,8 @@ _I18N: dict[str, dict[str, str]] = {
         'cmd.update.desc':      '预览 upstream 提交与 diff，再 git pull（不 commit）',
         'cmd.autorun.arg':      '[seed]',
         'cmd.autorun.desc':     '进入 autonomous_operation 自主模式',
-        'cmd.morphling.arg':    '[target]',
-        'cmd.morphling.desc':   '启用 Morphling 蒸馏 / 吞噬外部技能',
         'cmd.goal.arg':         '[goal]',
         'cmd.goal.desc':        '进入 Goal 模式（需 condition 约束）',
-        'cmd.hive.arg':         '[target]',
-        'cmd.hive.desc':        '进入 Hive 多 worker 协作模式',
-        'cmd.conductor.arg':    '[任务]',
-        'cmd.conductor.desc':   '调用 frontends/conductor.py 做多 subagent 编排',
         'cmd.obsidian_review.arg': '[init-profile|confirm-profile|周期 --vault 路径]',
         'cmd.obsidian_review.desc': '初始化/确认 Obsidian 环境模型并复盘',
         'cmd.scheduler.desc':   '多选启动/停止 reflect 任务（cron 由 reflect/scheduler.py 驱动）',
@@ -1650,7 +1628,6 @@ _TOOL_RE = re.compile(
 _XML_TOOL_RE = re.compile(
     r'<('
     r'code_run|file_read|file_write|file_patch|'
-    r'web_scan|web_execute_js|web_search|'
     r'update_working_checkpoint|start_long_term_update|ask_user|'
     r'tool_use|tool_result|tool_call|all_urls'
     r')>(.*?)</\1>',
@@ -1864,10 +1841,7 @@ def _cmds() -> list[tuple[str, str, str]]:
         # _t() so zh/en stay in sync.
         ('/update',    _t('cmd.update.arg'),     _t('cmd.update.desc')),
         ('/autorun',   _t('cmd.autorun.arg'),    _t('cmd.autorun.desc')),
-        ('/morphling', _t('cmd.morphling.arg'),  _t('cmd.morphling.desc')),
         ('/goal',      _t('cmd.goal.arg'),       _t('cmd.goal.desc')),
-        ('/hive',      _t('cmd.hive.arg'),       _t('cmd.hive.desc')),
-        ('/conductor', _t('cmd.conductor.arg'),  _t('cmd.conductor.desc')),
         ('/obsidian-review', _t('cmd.obsidian_review.arg'), _t('cmd.obsidian_review.desc')),
         ('/scheduler', '',                       _t('cmd.scheduler.desc')),
         ('/rewind',   _t('cmd.rewind.arg'),     _t('cmd.rewind.desc')),
@@ -3377,8 +3351,7 @@ class SB:
         question like "what did I just run?" finds the context.
 
         Output capture is utf-8 / replace so binary spew never crashes
-        the decoder.  30 s timeout — anything longer wants `/conductor`
-        territory, not a magic prompt."""
+        the decoder."""
         if not cmd:
             return
         w = _term()[0]
@@ -4236,9 +4209,8 @@ class SB:
             return
         if raw.startswith('/'):
             # Expand pasted/file/image placeholders BEFORE dispatch so a command
-            # carries the real pasted text, not a `[Pasted text #N]` marker — e.g.
-            # `/morphling <pasted multi-line target>`. Without this the command
-            # path returned here before the expansion below ever ran, so the agent
+            # carries pasted text markers through command dispatch. Without
+            # this, command paths returned here before the expansion below ever ran, so the agent
             # got the literal placeholder. `self.hist` already kept the raw input.
             expanded = self._expand(raw)
             # /btw owns its own live-region panel — keep the command itself
@@ -4601,7 +4573,7 @@ class SB:
             # with a session-recovery prompt before the LLM sees it.  We
             # just forward the literal string — the agent expands it.
             self._submit('/resume', [])
-        elif name in ('update', 'autorun', 'morphling', 'goal', 'hive', 'conductor', 'obsidian-review'):
+        elif name in ('update', 'autorun', 'goal', 'obsidian-review'):
             # slash_cmds bundle — build a long prompt and feed it back through
             # _submit so the agent sees an ordinary user turn.  Keeps the
             # frontend ignorant of SOP details; see frontends/slash_cmds.py.
@@ -4869,10 +4841,7 @@ class SB:
                          _t('help.emoji'),
                          _t('help.update'),
                          _t('help.autorun'),
-                         _t('help.morphling'),
                          _t('help.goal'),
-                         _t('help.hive'),
-                         _t('help.conductor'),
                          _t('help.obsidian_review'),
                          _t('help.scheduler'),
                          _t('help.quit'),
